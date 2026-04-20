@@ -1,6 +1,8 @@
 # AI Gateway
 
-轻量级多模型 AI 推理网关 | Lightweight Multi-Model AI Inference Gateway
+Lightweight Multi-Model AI Inference Gateway
+
+[中文文档](README_CN.md)
 
 ## Architecture
 
@@ -34,19 +36,19 @@ graph TB
     Dashboard --> DB
 ```
 
-## Features / 功能
+## Features
 
-- **统一 API** — 兼容 OpenAI 格式 `/v1/chat/completions`，任何 OpenAI SDK 客户端可直接对接
-- **多模型接入** — DeepSeek、OpenAI、Anthropic (Claude)、Ollama (本地模型)
-- **真实 SSE 流式** — 逐 token 流式输出，非缓冲
-- **智能路由** — 支持 round-robin / 成本优先 / 能力匹配三种策略
-- **自动降级** — 主模型故障时透明切换备选模型
-- **速率限制** — 令牌桶算法，按 Provider 限流
-- **成本追踪** — 按模型实际定价计算每次调用成本
-- **调用日志** — SQLite 记录每次调用的 token 用量和延迟
-- **Web 管理面板** — 统计图表、Playground 对话测试、调用日志查看
+- **Unified API** — OpenAI-compatible `/v1/chat/completions`, works with any OpenAI SDK client
+- **Multi-Provider** — DeepSeek, OpenAI, Anthropic (Claude), Ollama (local models)
+- **Real SSE Streaming** — Token-by-token streaming, not buffered
+- **Smart Routing** — Round-robin, cost-optimized, capability-based strategies
+- **Auto Fallback** — Transparent switch to backup when primary model fails
+- **Rate Limiting** — Token bucket algorithm, per-provider throttling
+- **Cost Tracking** — Per-model pricing, per-call cost calculation
+- **Call Logging** — SQLite-backed logs with token usage and latency
+- **Web Dashboard** — Stats, cost charts, provider status, playground, call logs
 
-## Quick Start / 快速开始
+## Quick Start
 
 ```bash
 git clone https://github.com/DNMCJH/ai-gateway.git
@@ -61,38 +63,38 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# 编辑 .env 填入你的 API Key
+# Edit .env with your API keys
 
-# 启动
+# Start
 python -m uvicorn app.main:app --host 0.0.0.0 --port 9001
 ```
 
-打开 `http://localhost:9001/dashboard` 进入管理面板。
+Open `http://localhost:9001/dashboard` for the web UI.
 
-## Docker 部署
+## Docker
 
 ```bash
-cp .env.example .env  # 编辑填入 API Key
+cp .env.example .env  # edit with your keys
 docker-compose up -d
 ```
 
-## 远程部署 (Cloudflare Tunnel)
+## Remote Deployment (Cloudflare Tunnel)
 
-如果服务器没有公网 IP，可以用 Cloudflare Tunnel 暴露服务：
+For servers without a public IP, use Cloudflare Tunnel to expose the service:
 
 ```bash
-# 启动服务
+# Start the service
 python -m uvicorn app.main:app --host 0.0.0.0 --port 9001
 
-# 另开终端，启动 tunnel
+# In another terminal, start the tunnel
 cloudflared tunnel --url http://localhost:9001
 ```
 
-访问 tunnel 输出的 `https://xxx.trycloudflare.com/dashboard` 即可。
+Access the dashboard at `https://xxx.trycloudflare.com/dashboard`.
 
-## API 使用
+## API Usage
 
-### 对话补全
+### Chat Completion
 
 ```bash
 curl http://localhost:9001/v1/chat/completions \
@@ -103,7 +105,7 @@ curl http://localhost:9001/v1/chat/completions \
   }'
 ```
 
-### 流式输出
+### Streaming
 
 ```bash
 curl http://localhost:9001/v1/chat/completions \
@@ -115,10 +117,10 @@ curl http://localhost:9001/v1/chat/completions \
   }'
 ```
 
-### 智能路由
+### Smart Routing
 
 ```bash
-# 使用 "auto" 让网关自动选择最优模型
+# Use "auto" to let the gateway pick the best model
 curl http://localhost:9001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -127,43 +129,43 @@ curl http://localhost:9001/v1/chat/completions \
   }'
 ```
 
-### 管理接口
+### Admin API
 
 ```bash
-curl http://localhost:9001/v1/models              # 模型列表
-curl http://localhost:9001/api/admin/stats         # 聚合统计
-curl http://localhost:9001/api/admin/logs          # 调用日志
-curl http://localhost:9001/api/admin/providers     # Provider 状态
-curl http://localhost:9001/api/admin/config/routing  # 路由策略
+curl http://localhost:9001/v1/models                 # List models
+curl http://localhost:9001/api/admin/stats            # Aggregated statistics
+curl http://localhost:9001/api/admin/logs             # Call logs
+curl http://localhost:9001/api/admin/providers        # Provider status
+curl http://localhost:9001/api/admin/config/routing   # Routing strategy
 ```
 
-## 支持的模型
+## Supported Models
 
-| Provider | Models | 定价 (每 1M tokens) |
-|----------|--------|-------------------|
+| Provider | Models | Pricing (per 1M tokens) |
+|----------|--------|------------------------|
 | DeepSeek | deepseek-chat, deepseek-reasoner | $0.14 - $2.19 |
 | OpenAI | gpt-4o, gpt-4o-mini, gpt-3.5-turbo | $0.15 - $10.00 |
 | Anthropic | claude-sonnet-4, claude-3.5-haiku | $0.80 - $15.00 |
-| Ollama | (自动发现本地模型) | 免费 |
+| Ollama | (auto-discovered local models) | Free |
 
-## 设计决策 / Design Decisions
+## Design Decisions
 
-1. **Provider 抽象 + AsyncIterator** — 流式接口使用 `AsyncIterator`，与 FastAPI 的 `EventSourceResponse` 天然组合，背压处理简洁。
+1. **Provider Abstraction with AsyncIterator** — Streaming uses `AsyncIterator` which composes naturally with FastAPI's `EventSourceResponse`, keeping backpressure handling simple.
 
-2. **无状态网关** — 不存储对话历史，网关只做转发。水平扩展友好，与 OpenAI API 设计一致。
+2. **Stateless Gateway** — No conversation state stored. The gateway forwards messages as-is. This keeps it horizontally scalable and follows the same pattern as OpenAI's API.
 
-3. **首 Chunk 超时降级** — 流式场景无法中途切换 Provider。通过设置首 chunk 超时，在数据到达客户端前完成 fallback 切换。
+3. **First-Chunk Timeout for Fallback** — In streaming mode, we can't switch providers mid-stream. Instead, we set a timeout for the first chunk — if the primary doesn't respond in time, we switch to fallback before any data reaches the client.
 
-4. **Strategy 模式路由** — 路由策略可插拔，新增策略只需实现一个类，路由器不感知具体策略。
+4. **Strategy Pattern for Routing** — Routing strategies are pluggable. Adding a new strategy is one class. The router doesn't know about specific strategies.
 
-5. **OpenAI 兼容 API** — 任何支持 OpenAI 的工具（LangChain、Cursor 等）可直接对接，零改造。
+5. **OpenAI-Compatible API Surface** — Any tool that works with OpenAI (LangChain, Cursor, etc.) works with this gateway out of the box.
 
-## 技术栈
+## Tech Stack
 
-- **后端**: Python, FastAPI, httpx, aiosqlite, sse-starlette
-- **前端**: HTML, Tailwind CSS, Alpine.js, Chart.js
-- **数据库**: SQLite
-- **部署**: Docker, docker-compose, Cloudflare Tunnel
+- **Backend**: Python, FastAPI, httpx, aiosqlite, sse-starlette
+- **Frontend**: HTML, Tailwind CSS, Alpine.js, Chart.js
+- **Database**: SQLite
+- **Deployment**: Docker, docker-compose, Cloudflare Tunnel
 
 ## License
 
