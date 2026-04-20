@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Gateway Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+[x-cloak] { display: none !important; }
+.chat-msg { white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen" x-data="app()" x-cloak>
+
+<!-- Nav -->
+<nav class="bg-white shadow">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+    <h1 class="text-xl font-bold text-gray-800">AI Gateway</h1>
+    <div class="flex gap-1">
+      <template x-for="t in tabs">
+        <button @click="tab=t" :class="tab===t?'bg-blue-600 text-white':'text-gray-600 hover:bg-gray-100'"
+          class="px-4 py-1.5 rounded-lg text-sm font-medium transition" x-text="t"></button>
+      </template>
+    </div>
+  </div>
+</nav>
+
+<main class="max-w-7xl mx-auto px-4 py-6">
+
+<!-- Dashboard Tab -->
+<div x-show="tab==='Dashboard'" x-init="fetchStats()">
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-xl shadow p-5">
+      <p class="text-sm text-gray-500">Total Calls</p>
+      <p class="text-2xl font-bold" x-text="stats.overall?.total_calls||0"></p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-5">
+      <p class="text-sm text-gray-500">Total Cost</p>
+      <p class="text-2xl font-bold">$<span x-text="(stats.overall?.total_cost||0).toFixed(4)"></span></p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-5">
+      <p class="text-sm text-gray-500">Avg Latency</p>
+      <p class="text-2xl font-bold"><span x-text="Math.round(stats.overall?.avg_latency||0)"></span>ms</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-5">
+      <p class="text-sm text-gray-500">Providers</p>
+      <p class="text-2xl font-bold" x-text="providers.length"></p>
+    </div>
+  </div>
+  <!-- Provider Cards -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <template x-for="p in providers">
+      <div class="bg-white rounded-xl shadow p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <span :class="p.available?'bg-green-400':'bg-red-400'" class="w-2.5 h-2.5 rounded-full"></span>
+          <span class="font-semibold" x-text="p.display_name"></span>
+        </div>
+        <p class="text-xs text-gray-500" x-text="p.models.map(m=>m.id).join(', ')"></p>
+      </div>
+    </template>
+  </div>
+  <!-- Cost Chart -->
+  <div class="bg-white rounded-xl shadow p-5">
+    <h3 class="font-semibold mb-3">Daily Cost (Last 30 Days)</h3>
+    <canvas id="costChart" height="100"></canvas>
+  </div>
+</div>
+
+<!-- Playground Tab -->
+<div x-show="tab==='Playground'" x-init="fetchStats()">
+  <div class="bg-white rounded-xl shadow flex flex-col" style="height:calc(100vh - 160px)">
+    <div class="p-4 border-b flex items-center gap-3">
+      <label class="text-sm font-medium">Model:</label>
+      <select x-model="selectedModel" class="border rounded-lg px-3 py-1.5 text-sm">
+        <template x-for="m in models"><option :value="m.id" x-text="m.id"></option></template>
+        <option value="auto">auto (smart route)</option>
+      </select>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4 space-y-3" id="chatBox">
+      <template x-for="(msg, i) in messages" :key="i">
+        <div :class="msg.role==='user'?'flex justify-end':'flex justify-start'">
+          <div :class="msg.role==='user'?'bg-blue-600 text-white':'bg-gray-100 text-gray-800'"
+            class="rounded-xl px-4 py-2 max-w-[75%] chat-msg text-sm" x-text="msg.content"></div>
+        </div>
+      </template>
+      <div x-show="sending" class="flex justify-start">
+        <div class="bg-gray-100 rounded-xl px-4 py-2 text-sm text-gray-400">Thinking...</div>
+      </div>
+    </div>
+    <div class="p-4 border-t flex gap-2">
+      <input x-model="input" @keydown.enter="sendMessage()" placeholder="Type a message..."
+        class="flex-1 border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <button @click="sendMessage()" :disabled="sending"
+        class="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- Logs Tab -->
+<div x-show="tab==='Logs'" x-init="fetchLogs()">
+  <div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="p-4 border-b flex justify-between items-center">
+      <h3 class="font-semibold">Call Logs</h3>
+      <button @click="fetchLogs()" class="text-sm text-blue-600 hover:underline">Refresh</button>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-4 py-2 text-left">Time</th>
+            <th class="px-4 py-2 text-left">Model</th>
+            <th class="px-4 py-2 text-left">Provider</th>
+            <th class="px-4 py-2 text-right">Tokens</th>
+            <th class="px-4 py-2 text-right">Cost</th>
+            <th class="px-4 py-2 text-right">Latency</th>
+            <th class="px-4 py-2 text-center">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="log in logs" :key="log.id">
+            <tr class="border-t hover:bg-gray-50">
+              <td class="px-4 py-2" x-text="log.timestamp"></td>
+              <td class="px-4 py-2" x-text="log.model"></td>
+              <td class="px-4 py-2" x-text="log.provider"></td>
+              <td class="px-4 py-2 text-right" x-text="(log.input_tokens||0)+'/'+(log.output_tokens||0)"></td>
+              <td class="px-4 py-2 text-right">$<span x-text="(log.cost_usd||0).toFixed(6)"></span></td>
+              <td class="px-4 py-2 text-right" x-text="(log.latency_ms||0)+'ms'"></td>
+              <td class="px-4 py-2 text-center">
+                <span :class="log.status==='success'?'bg-green-100 text-green-700':'bg-red-100 text-red-700'"
+                  class="px-2 py-0.5 rounded-full text-xs" x-text="log.status"></span>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<script>
+function app() {
+  return {
+    tabs: ['Dashboard', 'Playground', 'Logs'],
+    tab: 'Dashboard',
+    stats: {},
+    providers: [],
+    // Playground
+    models: [],
+    selectedModel: '',
+    messages: [],
+    input: '',
+    sending: false,
+    // Logs
+    logs: [],
+    async fetchStats() {
+      this.stats = await (await fetch('/api/admin/stats')).json();
+      this.providers = await (await fetch('/api/admin/providers')).json();
+      const modelsResp = await (await fetch('/v1/models')).json();
+      this.models = modelsResp.data || [];
+      if (this.models.length && !this.selectedModel) this.selectedModel = this.models[0].id;
+      this.$nextTick(() => this.renderChart());
+    },
+    renderChart() {
+      const ctx = document.getElementById('costChart');
+      if (!ctx || !this.stats.daily) return;
+      const days = this.stats.daily.slice().reverse();
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: days.map(d => d.day),
+          datasets: [{label: 'Cost ($)', data: days.map(d => d.cost||0), backgroundColor: 'rgba(59,130,246,0.5)'}]
+        },
+        options: {responsive: true, plugins: {legend: {display: false}}}
+      });
+    },
+    async sendMessage() {
+      if (!this.input.trim() || this.sending) return;
+      this.messages.push({role: 'user', content: this.input});
+      const userMsg = this.input;
+      this.input = '';
+      this.sending = true;
+      this.messages.push({role: 'assistant', content: ''});
+      const idx = this.messages.length - 1;
+      try {
+        const resp = await fetch('/v1/chat/completions', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({model: this.selectedModel, messages: this.messages.slice(0,-1).map(m=>({role:m.role,content:m.content})), stream: true})
+        });
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, {stream: true});
+          const lines = buf.split('\n');
+          buf = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const d = line.slice(6).trim();
+            if (d === '[DONE]') continue;
+            try {
+              const chunk = JSON.parse(d);
+              const content = chunk.choices?.[0]?.delta?.content;
+              if (content) this.messages[idx].content += content;
+            } catch {}
+          }
+        }
+      } catch (e) {
+        this.messages[idx].content = 'Error: ' + e.message;
+      }
+      this.sending = false;
+    },
+    async fetchLogs() {
+      this.logs = await (await fetch('/api/admin/logs?limit=100')).json();
+    }
+  }
+}
+</script>
+
+</body>
+</html>
