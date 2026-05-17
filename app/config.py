@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     def gateway_api_keys(self) -> list[str]:
         return [k.strip() for k in self.gateway_api_keys_raw.split(",") if k.strip()]
 
+    # Body logging — off by default (contains user prompts). Truncated to keep DB lean.
+    log_request_body: bool = False
+    log_response_body: bool = False
+    body_log_max_chars: int = 2000
+
     model_config = {"env_file": ".env"}
 
 

@@ -1,41 +1,93 @@
+import asyncio
+import logging
 import os
+from typing import Optional
+
 import aiosqlite
+
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 _db_path = settings.db_path
 
+_writer_conn: Optional[aiosqlite.Connection] = None
+_writer_queue: Optional[asyncio.Queue] = None
+_writer_task: Optional[asyncio.Task] = None
+_SHUTDOWN = object()
+
 
 async def init_db():
+    global _writer_conn, _writer_queue, _writer_task
+
     os.makedirs(os.path.dirname(_db_path) or ".", exist_ok=True)
-    async with aiosqlite.connect(_db_path) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS call_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-                request_id TEXT UNIQUE,
-                model TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                input_tokens INTEGER DEFAULT 0,
-                output_tokens INTEGER DEFAULT 0,
-                cost_usd REAL DEFAULT 0,
-                latency_ms INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'success',
-                error_message TEXT,
-                routing_strategy TEXT
-            )
-        """)
-        await db.commit()
+
+    _writer_conn = await aiosqlite.connect(_db_path)
+    # WAL allows readers to proceed concurrently with the single writer.
+    await _writer_conn.execute("PRAGMA journal_mode=WAL")
+    await _writer_conn.execute("PRAGMA synchronous=NORMAL")
+    await _writer_conn.execute("""
+        CREATE TABLE IF NOT EXISTS call_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+            request_id TEXT UNIQUE,
+            model TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            input_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            cost_usd REAL DEFAULT 0,
+            latency_ms INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'success',
+            error_message TEXT,
+            routing_strategy TEXT,
+            request_body TEXT,
+            response_body TEXT
+        )
+    """)
+    # Idempotent migration for tables created before body columns existed.
+    for col in ("request_body", "response_body"):
+        try:
+            await _writer_conn.execute(f"ALTER TABLE call_logs ADD COLUMN {col} TEXT")
+        except Exception:
+            pass
+    await _writer_conn.commit()
+
+    _writer_queue = asyncio.Queue()
+    _writer_task = asyncio.create_task(_writer_loop(), name="db-writer")
+
+
+async def shutdown_db():
+    if _writer_queue is not None:
+        await _writer_queue.put(_SHUTDOWN)
+    if _writer_task is not None:
+        await _writer_task
+    if _writer_conn is not None:
+        await _writer_conn.close()
+
+
+async def _writer_loop():
+    assert _writer_conn is not None and _writer_queue is not None
+    while True:
+        item = await _writer_queue.get()
+        if item is _SHUTDOWN:
+            return
+        sql, params = item
+        try:
+            await _writer_conn.execute(sql, params)
+            await _writer_conn.commit()
+        except Exception:
+            logger.exception("db writer failed for sql=%s", sql)
 
 
 async def log_call(**kwargs):
-    async with aiosqlite.connect(_db_path) as db:
-        cols = ", ".join(kwargs.keys())
-        placeholders = ", ".join(["?"] * len(kwargs))
-        await db.execute(
-            f"INSERT INTO call_logs ({cols}) VALUES ({placeholders})",
-            list(kwargs.values()),
-        )
-        await db.commit()
+    if _writer_queue is None:
+        # DB not initialized; drop the log rather than crash the request path.
+        logger.warning("log_call before init_db: %s", kwargs.get("request_id"))
+        return
+    cols = ", ".join(kwargs.keys())
+    placeholders = ", ".join(["?"] * len(kwargs))
+    sql = f"INSERT INTO call_logs ({cols}) VALUES ({placeholders})"
+    await _writer_queue.put((sql, list(kwargs.values())))
 
 
 async def get_logs(limit: int = 50, offset: int = 0, model: str = None, status: str = None):
