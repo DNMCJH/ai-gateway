@@ -12,7 +12,7 @@ from app.providers.deepseek import DeepSeekProvider
 from app.providers.openai import OpenAIProvider
 from app.providers.anthropic import AnthropicProvider
 from app.providers.ollama import OllamaProvider
-from app.storage.database import init_db
+from app.storage.database import init_db, shutdown_db
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -34,7 +34,17 @@ async def lifespan(app: FastAPI):
         if ollama.list_models():
             registry.register(ollama)
 
-    yield
+    try:
+        yield
+    finally:
+        for provider in registry.available_providers():
+            client = getattr(provider, "client", None)
+            if client is not None:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+        await shutdown_db()
 
 
 app = FastAPI(title="AI Gateway", version="0.1.0", lifespan=lifespan)

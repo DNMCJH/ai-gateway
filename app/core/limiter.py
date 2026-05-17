@@ -22,6 +22,11 @@ class TokenBucketLimiter:
             return True
         return False
 
+    def has_tokens(self, key: str) -> bool:
+        """Non-consuming check; useful for pre-filtering candidates before routing."""
+        self._refill(key)
+        return self._tokens.get(key, 0) >= 1
+
     def remaining(self, key: str) -> int:
         self._refill(key)
         return int(self._tokens.get(key, self._rpm))

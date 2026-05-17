@@ -142,6 +142,21 @@
 </main>
 
 <script>
+function gatewayKey() {
+  return localStorage.getItem('gateway_key') || '';
+}
+function authedFetch(url, opts = {}) {
+  const key = gatewayKey();
+  const headers = { ...(opts.headers || {}) };
+  if (key) headers['Authorization'] = 'Bearer ' + key;
+  return fetch(url, { ...opts, headers }).then(r => {
+    if (r.status === 401) {
+      const k = prompt('Gateway API key required:');
+      if (k) { localStorage.setItem('gateway_key', k); return authedFetch(url, opts); }
+    }
+    return r;
+  });
+}
 function app() {
   return {
     tabs: ['Dashboard', 'Playground', 'Logs'],
@@ -157,9 +172,9 @@ function app() {
     // Logs
     logs: [],
     async fetchStats() {
-      this.stats = await (await fetch('/api/admin/stats')).json();
-      this.providers = await (await fetch('/api/admin/providers')).json();
-      const modelsResp = await (await fetch('/v1/models')).json();
+      this.stats = await (await authedFetch('/api/admin/stats')).json();
+      this.providers = await (await authedFetch('/api/admin/providers')).json();
+      const modelsResp = await (await authedFetch('/v1/models')).json();
       this.models = modelsResp.data || [];
       if (this.models.length && !this.selectedModel) this.selectedModel = this.models[0].id;
       this.$nextTick(() => this.renderChart());
@@ -186,7 +201,7 @@ function app() {
       this.messages.push({role: 'assistant', content: ''});
       const idx = this.messages.length - 1;
       try {
-        const resp = await fetch('/v1/chat/completions', {
+        const resp = await authedFetch('/v1/chat/completions', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({model: this.selectedModel, messages: this.messages.slice(0,-1).map(m=>({role:m.role,content:m.content})), stream: true})
@@ -217,7 +232,7 @@ function app() {
       this.sending = false;
     },
     async fetchLogs() {
-      this.logs = await (await fetch('/api/admin/logs?limit=100')).json();
+      this.logs = await (await authedFetch('/api/admin/logs?limit=100')).json();
     }
   }
 }
