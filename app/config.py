@@ -18,6 +18,14 @@ class Settings(BaseSettings):
 
     db_path: str = "data/gateway.db"
 
+    # Comma-separated gateway API keys. Empty = auth disabled (dev mode).
+    # Stored as raw string to avoid pydantic-settings JSON-decoding list fields.
+    gateway_api_keys_raw: str = ""
+
+    @property
+    def gateway_api_keys(self) -> list[str]:
+        return [k.strip() for k in self.gateway_api_keys_raw.split(",") if k.strip()]
+
     model_config = {"env_file": ".env"}
 
 

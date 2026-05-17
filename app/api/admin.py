@@ -1,13 +1,14 @@
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.core.auth import require_api_key
 from app.providers.registry import registry
 from app.storage.database import get_logs, get_stats
 from app.api.chat import smart_router
 from app.core.router import STRATEGIES
 
-router = APIRouter(prefix="/api/admin")
+router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_api_key)])
 
 
 @router.get("/stats")

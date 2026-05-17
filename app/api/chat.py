@@ -2,11 +2,12 @@ import json
 import time
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
 from app.providers.registry import registry
+from app.core.auth import require_api_key
 from app.core.router import SmartRouter
 from app.core.retry import with_retry, stream_with_fallback
 from app.core.limiter import TokenBucketLimiter
@@ -14,7 +15,7 @@ from app.core.cost import calculate_cost
 from app.storage.database import log_call
 from app.schemas.chat import ChatCompletionRequest
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 smart_router = SmartRouter(settings.default_routing_strategy)
 limiter = TokenBucketLimiter(settings.rate_limit_rpm)
 

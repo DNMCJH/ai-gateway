@@ -1,10 +1,11 @@
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.core.auth import require_api_key
 from app.providers.registry import registry
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 @router.get("/v1/models")
