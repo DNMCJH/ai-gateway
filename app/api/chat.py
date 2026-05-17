@@ -18,15 +18,26 @@ router = APIRouter()
 smart_router = SmartRouter(settings.default_routing_strategy)
 limiter = TokenBucketLimiter(settings.rate_limit_rpm)
 
-AUTO_ROUTE_MODELS = {"auto", "best", "cheapest"}
+ROUTE_ALIASES = {
+    "auto": None,
+    "best": "capability",
+    "cheapest": "cost",
+}
 
 
-def _resolve_provider(request):
-    if request.model in AUTO_ROUTE_MODELS:
+def _resolve_route(request):
+    """Return the provider and resolved model id. Rewrites alias models in-place."""
+    if request.model in ROUTE_ALIASES:
         providers = registry.available_providers()
         if not providers:
             raise HTTPException(status_code=503, detail="No providers available")
-        return smart_router.route(request, providers)
+        strategy_override = ROUTE_ALIASES[request.model]
+        try:
+            provider, model_id = smart_router.route(request, providers, strategy_override)
+        except ValueError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        request.model = model_id
+        return provider
 
     try:
         return registry.get_provider_for_model(request.model)
@@ -65,7 +76,7 @@ async def _stream_response(provider, request, fallbacks, request_id):
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
-    provider = _resolve_provider(request)
+    provider = _resolve_route(request)
 
     if not limiter.acquire(provider.name):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
