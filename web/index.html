@@ -3,143 +3,437 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Gateway Dashboard</title>
+<title>AI Gateway Console</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'media',
+  theme: {
+    extend: {
+      colors: {
+        surface: { 50: '#f8fafc', 100: '#f1f5f9', 800: '#1e293b', 900: '#0f172a', 950: '#020617' },
+        accent: { 400: '#22d3ee', 500: '#06b6d4', 600: '#0891b2', 700: '#0e7490' },
+      },
+      fontFamily: { mono: ['JetBrains Mono', 'Fira Code', 'monospace'] }
+    }
+  }
+}
+</script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 [x-cloak] { display: none !important; }
 .chat-msg { white-space: pre-wrap; word-break: break-word; }
+.fade-in { animation: fadeIn 0.2s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+.card { background: white; border: 1px solid #e2e8f0; }
+@media (prefers-color-scheme: dark) {
+  .card { background: rgba(30, 41, 59, 0.8); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-color: rgba(51, 65, 85, 0.5); }
+  ::-webkit-scrollbar-thumb { background: #334155; }
+  ::-webkit-scrollbar-thumb:hover { background: #475569; }
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+input, select, textarea { color-scheme: light dark; }
 </style>
 </head>
-<body class="bg-gray-50 min-h-screen" x-data="app()" x-cloak>
+<body class="bg-gray-50 dark:bg-surface-950 text-gray-900 dark:text-gray-100 min-h-screen flex" x-data="app()" x-cloak>
 
-<!-- Nav -->
-<nav class="bg-white shadow">
-  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-    <h1 class="text-xl font-bold text-gray-800">AI Gateway</h1>
-    <div class="flex gap-1">
-      <template x-for="t in tabs">
-        <button @click="tab=t" :class="tab===t?'bg-blue-600 text-white':'text-gray-600 hover:bg-gray-100'"
-          class="px-4 py-1.5 rounded-lg text-sm font-medium transition" x-text="t"></button>
-      </template>
-    </div>
-  </div>
-</nav>
-
-<main class="max-w-7xl mx-auto px-4 py-6">
-
-<!-- Dashboard Tab -->
-<div x-show="tab==='Dashboard'" x-init="fetchStats()">
-  <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-    <div class="bg-white rounded-xl shadow p-5">
-      <p class="text-sm text-gray-500">Total Calls</p>
-      <p class="text-2xl font-bold" x-text="stats.overall?.total_calls||0"></p>
-    </div>
-    <div class="bg-white rounded-xl shadow p-5">
-      <p class="text-sm text-gray-500">Total Cost</p>
-      <p class="text-2xl font-bold">$<span x-text="(stats.overall?.total_cost||0).toFixed(4)"></span></p>
-    </div>
-    <div class="bg-white rounded-xl shadow p-5">
-      <p class="text-sm text-gray-500">Avg Latency</p>
-      <p class="text-2xl font-bold"><span x-text="Math.round(stats.overall?.avg_latency||0)"></span>ms</p>
-    </div>
-    <div class="bg-white rounded-xl shadow p-5">
-      <p class="text-sm text-gray-500">Providers</p>
-      <p class="text-2xl font-bold" x-text="providers.length"></p>
-    </div>
-  </div>
-  <!-- Provider Cards -->
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-    <template x-for="p in providers">
-      <div class="bg-white rounded-xl shadow p-5">
-        <div class="flex items-center gap-2 mb-2">
-          <span :class="p.available?'bg-green-400':'bg-red-400'" class="w-2.5 h-2.5 rounded-full"></span>
-          <span class="font-semibold" x-text="p.display_name"></span>
-        </div>
-        <p class="text-xs text-gray-500" x-text="p.models.map(m=>m.id).join(', ')"></p>
+<!-- Sidebar -->
+<aside class="w-64 bg-white dark:bg-surface-900 border-r border-gray-200 dark:border-slate-800 flex flex-col fixed h-full z-30 transition-all duration-300"
+  :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-64'">
+  <div class="p-5 border-b border-gray-200 dark:border-slate-800">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-500 to-blue-500 flex items-center justify-center">
+        <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
       </div>
+      <span class="font-bold text-lg tracking-tight text-gray-900 dark:text-white">AI Gateway</span>
+    </div>
+    <p class="text-xs text-gray-400 dark:text-slate-500 mt-1">Unified LLM Inference</p>
+  </div>
+  <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
+    <template x-for="item in navItems" :key="item.id">
+      <button @click="page=item.id"
+        :class="page===item.id ? 'bg-gray-100 dark:bg-slate-800 text-accent-700 dark:text-accent-400' : 'text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800/50'"
+        class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150">
+        <span x-html="item.icon" class="w-5 h-5 flex-shrink-0"></span>
+        <span x-text="item.label"></span>
+      </button>
     </template>
-  </div>
-  <!-- Cost Chart -->
-  <div class="bg-white rounded-xl shadow p-5">
-    <h3 class="font-semibold mb-3">Daily Cost (Last 30 Days)</h3>
-    <canvas id="costChart" height="100"></canvas>
-  </div>
-</div>
-
-<!-- Playground Tab -->
-<div x-show="tab==='Playground'" x-init="fetchStats()">
-  <div class="bg-white rounded-xl shadow flex flex-col" style="height:calc(100vh - 160px)">
-    <div class="p-4 border-b flex items-center gap-3">
-      <label class="text-sm font-medium">Model:</label>
-      <select x-model="selectedModel" class="border rounded-lg px-3 py-1.5 text-sm">
-        <template x-for="m in models"><option :value="m.id" x-text="m.id"></option></template>
-        <option value="auto">auto (smart route)</option>
-      </select>
+  </nav>
+  <div class="p-4 border-t border-gray-200 dark:border-slate-800">
+    <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 dark:bg-slate-800/50">
+      <span class="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400 pulse-dot"></span>
+      <span class="text-xs text-gray-500 dark:text-slate-400" x-text="providers.length + ' provider' + (providers.length!==1?'s':'') + ' online'"></span>
     </div>
-    <div class="flex-1 overflow-y-auto p-4 space-y-3" id="chatBox">
-      <template x-for="(msg, i) in messages" :key="i">
-        <div :class="msg.role==='user'?'flex justify-end':'flex justify-start'">
-          <div :class="msg.role==='user'?'bg-blue-600 text-white':'bg-gray-100 text-gray-800'"
-            class="rounded-xl px-4 py-2 max-w-[75%] chat-msg text-sm" x-text="msg.content"></div>
+  </div>
+</aside>
+
+<!-- Main -->
+<div class="flex-1 lg:ml-64 min-h-screen flex flex-col">
+  <!-- Top Bar -->
+  <header class="h-14 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between px-6 bg-white/80 dark:bg-surface-900/50 sticky top-0 z-20" style="-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)">
+    <button @click="sidebarOpen=!sidebarOpen" class="lg:hidden text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <h2 class="text-sm font-semibold text-gray-700 dark:text-slate-300" x-text="navItems.find(n=>n.id===page)?.label || 'Overview'"></h2>
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-1.5">
+        <button @click="toggleAutoRefresh()" :class="autoRefresh ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400' : 'text-gray-400 dark:text-slate-500'" class="text-xs px-2 py-1 rounded transition" x-text="autoRefresh ? 'Auto ●' : 'Auto'"></button>
+      </div>
+      <span class="text-xs text-gray-400 dark:text-slate-500 font-mono">v0.2.0</span>
+      <button @click="showKeyModal=true" class="text-gray-400 dark:text-slate-400 hover:text-accent-600 dark:hover:text-accent-400 transition">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Page Content -->
+  <main class="flex-1 p-6 overflow-y-auto">
+    <!-- Overview Page -->
+    <div x-show="page==='overview'" x-init="fetchStats()" class="fade-in space-y-6">
+      <!-- Loading skeleton -->
+      <div x-show="statsLoading" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <template x-for="i in 4"><div class="card rounded-xl p-5 shadow-sm animate-pulse"><div class="h-3 w-16 bg-gray-200 dark:bg-slate-700 rounded mb-3"></div><div class="h-7 w-24 bg-gray-200 dark:bg-slate-700 rounded"></div></div></template>
+      </div>
+      <div x-show="!statsLoading" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="card rounded-xl p-5 shadow-sm">
+          <p class="text-xs text-gray-500 dark:text-slate-400 uppercase tracking-wider">Total Calls</p>
+          <p class="text-2xl font-bold font-mono mt-1" x-text="formatNum(stats.overall?.total_calls||0)"></p>
         </div>
-      </template>
-      <div x-show="sending" class="flex justify-start">
-        <div class="bg-gray-100 rounded-xl px-4 py-2 text-sm text-gray-400">Thinking...</div>
+        <div class="card rounded-xl p-5 shadow-sm">
+          <p class="text-xs text-gray-500 dark:text-slate-400 uppercase tracking-wider">Total Cost</p>
+          <p class="text-2xl font-bold font-mono mt-1 text-emerald-600 dark:text-emerald-400">$<span x-text="(stats.overall?.total_cost||0).toFixed(4)"></span></p>
+        </div>
+        <div class="card rounded-xl p-5 shadow-sm">
+          <p class="text-xs text-gray-500 dark:text-slate-400 uppercase tracking-wider">Avg Latency</p>
+          <p class="text-2xl font-bold font-mono mt-1"><span x-text="Math.round(stats.overall?.avg_latency||0)"></span><span class="text-sm text-gray-400 dark:text-slate-500">ms</span></p>
+        </div>
+        <div class="card rounded-xl p-5 shadow-sm">
+          <p class="text-xs text-gray-500 dark:text-slate-400 uppercase tracking-wider">Total Tokens</p>
+          <p class="text-2xl font-bold font-mono mt-1" x-text="formatNum((stats.overall?.total_input_tokens||0)+(stats.overall?.total_output_tokens||0))"></p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="lg:col-span-2 card rounded-xl p-5 shadow-sm">
+          <h3 class="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-4">Daily Usage (30d)</h3>
+          <canvas id="costChart" height="120"></canvas>
+        </div>
+        <div class="card rounded-xl p-5 shadow-sm">
+          <h3 class="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-4">Providers</h3>
+          <div class="space-y-3">
+            <template x-for="p in providers" :key="p.name">
+              <div class="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-slate-800/50">
+                <div class="flex items-center gap-2">
+                  <span :class="p.available?'bg-emerald-500 dark:bg-emerald-400':'bg-red-400'" class="w-2 h-2 rounded-full"></span>
+                  <span class="text-sm font-medium" x-text="p.display_name"></span>
+                </div>
+                <span class="text-xs text-gray-400 dark:text-slate-500 font-mono" x-text="p.models.length+' models'"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div class="card rounded-xl p-5 shadow-sm" x-show="stats.by_model?.length">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-4">Model Breakdown</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-xs text-gray-500 dark:text-slate-500 uppercase">
+              <th class="text-left pb-3">Model</th><th class="text-left pb-3">Provider</th>
+              <th class="text-right pb-3">Calls</th><th class="text-right pb-3">Tokens</th>
+              <th class="text-right pb-3">Cost</th><th class="text-right pb-3">Avg Latency</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="m in stats.by_model" :key="m.model+m.provider">
+                <tr class="border-t border-gray-100 dark:border-slate-800">
+                  <td class="py-2.5 font-mono text-accent-700 dark:text-accent-400" x-text="m.model"></td>
+                  <td class="py-2.5 text-gray-500 dark:text-slate-400" x-text="m.provider"></td>
+                  <td class="py-2.5 text-right font-mono" x-text="m.calls"></td>
+                  <td class="py-2.5 text-right font-mono text-gray-500 dark:text-slate-400" x-text="formatNum((m.input_tokens||0)+(m.output_tokens||0))"></td>
+                  <td class="py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">$<span x-text="(m.cost||0).toFixed(4)"></span></td>
+                  <td class="py-2.5 text-right font-mono text-gray-500 dark:text-slate-400" x-text="Math.round(m.avg_latency||0)+'ms'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
-    <div class="p-4 border-t flex gap-2">
-      <input x-model="input" @keydown.enter="sendMessage()" placeholder="Type a message..."
-        class="flex-1 border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-      <button @click="sendMessage()" :disabled="sending"
-        class="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">Send</button>
-    </div>
-  </div>
-</div>
 
-<!-- Logs Tab -->
-<div x-show="tab==='Logs'" x-init="fetchLogs()">
-  <div class="bg-white rounded-xl shadow overflow-hidden">
-    <div class="p-4 border-b flex justify-between items-center">
-      <h3 class="font-semibold">Call Logs</h3>
-      <button @click="fetchLogs()" class="text-sm text-blue-600 hover:underline">Refresh</button>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead class="bg-gray-50">
-          <tr>
-            <th class="px-4 py-2 text-left">Time</th>
-            <th class="px-4 py-2 text-left">Model</th>
-            <th class="px-4 py-2 text-left">Provider</th>
-            <th class="px-4 py-2 text-right">Tokens</th>
-            <th class="px-4 py-2 text-right">Cost</th>
-            <th class="px-4 py-2 text-right">Latency</th>
-            <th class="px-4 py-2 text-center">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="log in logs" :key="log.id">
-            <tr class="border-t hover:bg-gray-50">
-              <td class="px-4 py-2" x-text="log.timestamp"></td>
-              <td class="px-4 py-2" x-text="log.model"></td>
-              <td class="px-4 py-2" x-text="log.provider"></td>
-              <td class="px-4 py-2 text-right" x-text="(log.input_tokens||0)+'/'+(log.output_tokens||0)"></td>
-              <td class="px-4 py-2 text-right">$<span x-text="(log.cost_usd||0).toFixed(6)"></span></td>
-              <td class="px-4 py-2 text-right" x-text="(log.latency_ms||0)+'ms'"></td>
-              <td class="px-4 py-2 text-center">
-                <span :class="log.status==='success'?'bg-green-100 text-green-700':'bg-red-100 text-red-700'"
-                  class="px-2 py-0.5 rounded-full text-xs" x-text="log.status"></span>
-              </td>
-            </tr>
+    <!-- Playground Page -->
+    <div x-show="page==='playground'" class="fade-in h-full">
+      <div class="card rounded-xl shadow-sm flex flex-col" style="height:calc(100vh - 8rem)">
+        <div class="p-4 border-b border-gray-200 dark:border-slate-700 flex items-center gap-4">
+          <select x-model="selectedModel" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50">
+            <template x-for="m in models"><option :value="m.id" x-text="m.id"></option></template>
+            <option value="auto">auto (smart route)</option>
+            <option value="best">best (capability)</option>
+            <option value="cheapest">cheapest (cost)</option>
+          </select>
+          <button @click="messages=[]" class="text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 transition">Clear</button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-5 space-y-4" id="chatBox">
+          <div x-show="!messages.length" class="flex items-center justify-center h-full">
+            <p class="text-gray-400 dark:text-slate-600 text-sm">Start a conversation...</p>
+          </div>
+          <template x-for="(msg, i) in messages" :key="i">
+            <div :class="msg.role==='user'?'flex justify-end':'flex justify-start'">
+              <div :class="msg.role==='user'?'bg-accent-50 dark:bg-accent-600/20 border border-accent-200 dark:border-accent-500/30 text-gray-800 dark:text-slate-100':'bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 text-gray-800 dark:text-slate-200'"
+                class="rounded-xl px-4 py-3 max-w-[80%] chat-msg text-sm" x-text="msg.content"></div>
+            </div>
           </template>
-        </tbody>
-      </table>
+          <div x-show="sending" class="flex justify-start">
+            <div class="bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm">
+              <span class="inline-flex gap-1"><span class="w-1.5 h-1.5 bg-accent-500 rounded-full animate-bounce"></span><span class="w-1.5 h-1.5 bg-accent-500 rounded-full animate-bounce" style="animation-delay:0.1s"></span><span class="w-1.5 h-1.5 bg-accent-500 rounded-full animate-bounce" style="animation-delay:0.2s"></span></span>
+            </div>
+          </div>
+        </div>
+        <div class="p-4 border-t border-gray-200 dark:border-slate-700">
+          <div x-show="lastUsage" class="flex items-center gap-4 mb-2 text-xs text-gray-400 dark:text-slate-500">
+            <span x-text="'In: '+(lastUsage?.prompt_tokens||0)"></span>
+            <span x-text="'Out: '+(lastUsage?.completion_tokens||0)"></span>
+            <span class="text-emerald-600 dark:text-emerald-400" x-text="'$'+(lastUsage?.cost||0).toFixed(5)"></span>
+            <span x-text="(lastUsage?.latency||0)+'ms'"></span>
+          </div>
+          <div class="flex gap-3">
+            <input x-model="input" @keydown.enter="sendMessage()" placeholder="Type a message..."
+              class="flex-1 bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600">
+            <button @click="sendMessage()" :disabled="sending"
+              class="bg-gradient-to-r from-accent-500 to-blue-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-40 transition">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Logs Page -->
+    <div x-show="page==='logs'" x-init="fetchLogs()" class="fade-in space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex gap-2">
+          <select x-model="logFilter.status" @change="logPage=0;fetchLogs()" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs">
+            <option value="">All Status</option>
+            <option value="success">Success</option>
+            <option value="error">Error</option>
+            <option value="cache_hit">Cache Hit</option>
+          </select>
+          <select x-model="logFilter.model" @change="logPage=0;fetchLogs()" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs">
+            <option value="">All Models</option>
+            <template x-for="m in models"><option :value="m.id" x-text="m.id"></option></template>
+          </select>
+        </div>
+        <button @click="fetchLogs()" class="text-xs text-accent-600 dark:text-accent-400 hover:text-accent-700 dark:hover:text-accent-300 transition">Refresh</button>
+      </div>
+      <div class="card rounded-xl shadow-sm overflow-hidden">
+        <div x-show="logsLoading" class="p-8 text-center text-gray-400 dark:text-slate-500 text-sm">Loading...</div>
+        <div x-show="!logsLoading" class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-xs text-gray-500 dark:text-slate-500 uppercase border-b border-gray-200 dark:border-slate-800">
+              <th class="px-4 py-3 text-left">Time</th>
+              <th class="px-4 py-3 text-left">Model</th>
+              <th class="px-4 py-3 text-left">Provider</th>
+              <th class="px-4 py-3 text-right">In/Out</th>
+              <th class="px-4 py-3 text-right">Cost</th>
+              <th class="px-4 py-3 text-right">Latency</th>
+              <th class="px-4 py-3 text-center">Status</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="log in logs" :key="log.id">
+                <tr>
+                  <td colspan="7" class="p-0">
+                    <div @click="expandedLog = expandedLog===log.id ? null : log.id" class="grid grid-cols-7 px-4 py-2.5 border-t border-gray-100 dark:border-slate-800/50 hover:bg-gray-50 dark:hover:bg-slate-800/30 transition cursor-pointer">
+                      <span class="text-gray-500 dark:text-slate-400 text-xs font-mono" x-text="log.timestamp?.slice(5,16)"></span>
+                      <span class="font-mono text-accent-700 dark:text-accent-400 text-xs" x-text="log.model"></span>
+                      <span class="text-gray-500 dark:text-slate-400 text-xs" x-text="log.provider"></span>
+                      <span class="text-right font-mono text-xs" x-text="(log.input_tokens||0)+'/'+(log.output_tokens||0)"></span>
+                      <span class="text-right font-mono text-xs text-emerald-600 dark:text-emerald-400" x-text="'$'+(log.cost_usd||0).toFixed(5)"></span>
+                      <span class="text-right font-mono text-xs text-gray-500 dark:text-slate-400" x-text="(log.latency_ms||0)+'ms'"></span>
+                      <span class="text-center"><span :class="{'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400': log.status==='success', 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400': log.status==='error', 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400': log.status==='cache_hit'}" class="px-2 py-0.5 rounded text-xs font-medium" x-text="log.status"></span></span>
+                    </div>
+                    <div x-show="expandedLog===log.id" x-transition class="px-4 pb-3 space-y-2 bg-gray-50/50 dark:bg-slate-800/20">
+                      <div x-show="log.request_body" class="text-xs">
+                        <p class="text-gray-400 dark:text-slate-500 mb-1">Request:</p>
+                        <pre class="bg-gray-100 dark:bg-slate-900 rounded p-2 overflow-x-auto text-gray-600 dark:text-slate-400 font-mono" x-text="log.request_body"></pre>
+                      </div>
+                      <div x-show="log.response_body" class="text-xs">
+                        <p class="text-gray-400 dark:text-slate-500 mb-1">Response:</p>
+                        <pre class="bg-gray-100 dark:bg-slate-900 rounded p-2 overflow-x-auto text-gray-600 dark:text-slate-400 font-mono" x-text="log.response_body"></pre>
+                      </div>
+                      <div x-show="log.error_message" class="text-xs">
+                        <p class="text-red-500 dark:text-red-400" x-text="'Error: '+log.error_message"></p>
+                      </div>
+                      <p x-show="!log.request_body && !log.response_body && !log.error_message" class="text-xs text-gray-400 dark:text-slate-600">No body logged (enable log_request_body / log_response_body in config)</p>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <!-- Pagination -->
+        <div class="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-slate-800">
+          <span class="text-xs text-gray-400 dark:text-slate-500" x-text="'Page '+(logPage+1)"></span>
+          <div class="flex gap-2">
+            <button @click="logPage=Math.max(0,logPage-1);fetchLogs()" :disabled="logPage===0"
+              class="px-3 py-1 rounded text-xs border border-gray-300 dark:border-slate-700 disabled:opacity-30 hover:bg-gray-100 dark:hover:bg-slate-800 transition">Prev</button>
+            <button @click="logPage++;fetchLogs()" :disabled="logs.length < logPageSize"
+              class="px-3 py-1 rounded text-xs border border-gray-300 dark:border-slate-700 disabled:opacity-30 hover:bg-gray-100 dark:hover:bg-slate-800 transition">Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cache Page -->
+    <div x-show="page==='cache'" x-init="fetchCacheStats()" class="fade-in space-y-6">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="card rounded-xl p-5 shadow-sm">
+          <p class="text-xs text-gray-500 dark:text-slate-400 uppercase tracking-wider">Cached Entries</p>
+          <p class="text-2xl font-bold font-mono mt-1" x-text="cacheStats.total_entries||0"></p>
+        </div>
+        <div class="card rounded-xl p-5 shadow-sm">
+          <p class="text-xs text-gray-500 dark:text-slate-400 uppercase tracking-wider">Active Entries</p>
+          <p class="text-2xl font-bold font-mono mt-1 text-blue-600 dark:text-blue-400" x-text="cacheStats.active_entries||0"></p>
+        </div>
+        <div class="card rounded-xl p-5 shadow-sm">
+          <p class="text-xs text-gray-500 dark:text-slate-400 uppercase tracking-wider">TTL</p>
+          <p class="text-2xl font-bold font-mono mt-1" x-text="(cacheStats.ttl_seconds||3600)+'s'"></p>
+        </div>
+      </div>
+      <div class="card rounded-xl p-5 shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-gray-700 dark:text-slate-300">Cache Configuration</h3>
+          <button @click="fetchCacheStats()" class="text-xs text-accent-600 dark:text-accent-400 hover:text-accent-700 dark:hover:text-accent-300">Refresh</button>
+        </div>
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div class="p-3 rounded-lg bg-gray-50 dark:bg-slate-800/50">
+            <p class="text-xs text-gray-400 dark:text-slate-500">Exact Match</p>
+            <p class="font-mono mt-1">Enabled</p>
+          </div>
+          <div class="p-3 rounded-lg bg-gray-50 dark:bg-slate-800/50">
+            <p class="text-xs text-gray-400 dark:text-slate-500">Semantic Cache</p>
+            <p class="font-mono mt-1" x-text="cacheStats.semantic_enabled ? 'Enabled ('+cacheStats.semantic_threshold+')' : 'Disabled'"></p>
+          </div>
+          <div class="p-3 rounded-lg bg-gray-50 dark:bg-slate-800/50">
+            <p class="text-xs text-gray-400 dark:text-slate-500">With Embedding</p>
+            <p class="font-mono mt-1" x-text="cacheStats.with_embedding||0"></p>
+          </div>
+          <div class="p-3 rounded-lg bg-gray-50 dark:bg-slate-800/50">
+            <p class="text-xs text-gray-400 dark:text-slate-500">Eviction Interval</p>
+            <p class="font-mono mt-1">600s</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Tenants Page -->
+    <div x-show="page==='tenants'" x-init="fetchTenants()" class="fade-in space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-slate-300" x-text="tenants.length+' tenant'+(tenants.length!==1?'s':'')"></h3>
+        <button @click="showTenantForm=!showTenantForm" class="bg-accent-50 dark:bg-accent-500/20 text-accent-700 dark:text-accent-400 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-accent-100 dark:hover:bg-accent-500/30 transition">
+          + New Tenant
+        </button>
+      </div>
+      <div x-show="showTenantForm" x-transition class="card rounded-xl p-5 shadow-sm space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <input x-model="tenantForm.api_key" placeholder="API Key" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600">
+          <input x-model="tenantForm.name" placeholder="Name" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600">
+          <input x-model.number="tenantForm.rpm_limit" type="number" placeholder="RPM Limit" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600">
+          <input x-model.number="tenantForm.daily_budget_usd" type="number" step="0.01" placeholder="Daily Budget ($)" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600">
+        </div>
+        <button @click="createTenant()" class="bg-gradient-to-r from-accent-500 to-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition">Create</button>
+      </div>
+      <div class="space-y-2">
+        <template x-for="t in tenants" :key="t.api_key">
+          <div class="card rounded-xl p-4 shadow-sm flex items-center justify-between">
+            <div>
+              <div class="flex items-center gap-2">
+                <span :class="t.enabled?'bg-emerald-500 dark:bg-emerald-400':'bg-gray-400 dark:bg-slate-600'" class="w-2 h-2 rounded-full"></span>
+                <span class="font-medium text-sm" x-text="t.name||'Unnamed'"></span>
+              </div>
+              <p class="text-xs font-mono text-gray-400 dark:text-slate-500 mt-1" x-text="t.api_key.slice(0,8)+'...'"></p>
+            </div>
+            <div class="text-right text-xs text-gray-500 dark:text-slate-400">
+              <p x-text="t.rpm_limit+' RPM'"></p>
+              <p x-show="t.daily_budget_usd" x-text="'$'+t.daily_budget_usd+'/day'"></p>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Prompts Page -->
+    <div x-show="page==='prompts'" x-init="fetchPrompts()" class="fade-in space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-slate-300" x-text="prompts.length+' prompt'+(prompts.length!==1?'s':'')"></h3>
+        <button @click="showPromptForm=!showPromptForm" class="bg-accent-50 dark:bg-accent-500/20 text-accent-700 dark:text-accent-400 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-accent-100 dark:hover:bg-accent-500/30 transition">
+          + New Prompt
+        </button>
+      </div>
+      <div x-show="showPromptForm" x-transition class="card rounded-xl p-5 shadow-sm space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <input x-model="promptForm.name" placeholder="Prompt name" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600">
+          <input x-model="promptForm.model" placeholder="Model (optional)" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600">
+          <input x-model.number="promptForm.ab_weight" type="number" step="0.1" placeholder="A/B Weight" class="bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600">
+        </div>
+        <textarea x-model="promptForm.messages_raw" rows="4" placeholder='[{"role":"system","content":"You are..."}]'
+          class="w-full bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600"></textarea>
+        <button @click="createPrompt()" class="bg-gradient-to-r from-accent-500 to-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition">Create</button>
+      </div>
+      <div class="space-y-2">
+        <template x-for="p in prompts" :key="p.id">
+          <div class="card rounded-xl p-4 shadow-sm">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span :class="p.is_active?'bg-emerald-500 dark:bg-emerald-400':'bg-gray-400 dark:bg-slate-600'" class="w-2 h-2 rounded-full"></span>
+                <span class="font-medium text-sm" x-text="p.name"></span>
+                <span class="text-xs font-mono text-gray-400 dark:text-slate-500" x-text="'v'+p.version"></span>
+                <span x-show="p.model" class="text-xs bg-gray-100 dark:bg-slate-800 px-2 py-0.5 rounded text-gray-600 dark:text-slate-400" x-text="p.model"></span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-400 dark:text-slate-500" x-text="'weight: '+p.ab_weight"></span>
+                <button @click="deletePrompt(p.id)" class="text-xs text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition">Deactivate</button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Settings Page -->
+    <div x-show="page==='settings'" class="fade-in space-y-6">
+      <div class="card rounded-xl p-5 shadow-sm space-y-4">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-slate-300">Routing Strategy</h3>
+        <div class="flex gap-2 flex-wrap">
+          <template x-for="s in ['round-robin','cost','latency','capability']">
+            <button @click="setRouting(s)"
+              :class="routingStrategy===s ? 'bg-accent-50 dark:bg-accent-500/20 text-accent-700 dark:text-accent-400 border-accent-300 dark:border-accent-500/50' : 'bg-gray-50 dark:bg-slate-800 text-gray-600 dark:text-slate-400 border-gray-300 dark:border-slate-700 hover:border-gray-400 dark:hover:border-slate-600'"
+              class="px-3 py-1.5 rounded-lg text-xs font-medium border transition" x-text="s"></button>
+          </template>
+        </div>
+      </div>
+      <div class="card rounded-xl p-5 shadow-sm space-y-4">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-slate-300">API Key</h3>
+        <div class="flex gap-2">
+          <input :value="gatewayKey()" type="password" readonly class="flex-1 bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-mono">
+          <button @click="changeKey()" class="bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 text-gray-600 dark:text-slate-300 px-3 py-2 rounded-lg text-xs hover:bg-gray-200 dark:hover:bg-slate-700 transition">Change</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Key Modal -->
+<div x-show="showKeyModal" x-transition.opacity class="fixed inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" @click.self="showKeyModal=false">
+  <div class="card rounded-2xl p-6 w-full max-w-sm space-y-4 shadow-xl" @click.stop>
+    <h3 class="font-semibold text-gray-800 dark:text-slate-200">Enter API Key</h3>
+    <input x-model="keyInput" type="password" placeholder="sk-..." class="w-full bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-500/50 placeholder-gray-400 dark:placeholder-slate-600" @keydown.enter="saveKey()">
+    <div class="flex justify-end gap-2">
+      <button @click="showKeyModal=false" class="px-4 py-2 text-sm text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 transition">Cancel</button>
+      <button @click="saveKey()" class="bg-gradient-to-r from-accent-500 to-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition">Save</button>
     </div>
   </div>
 </div>
-
-</main>
 
 <script>
 function gatewayKey() {
@@ -157,27 +451,55 @@ function authedFetch(url, opts = {}) {
     return r;
   });
 }
+function formatNum(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return String(n || 0);
+}
+function isDark() {
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
 function app() {
   return {
-    tabs: ['Dashboard', 'Playground', 'Logs'],
-    tab: 'Dashboard',
-    stats: {},
-    providers: [],
-    // Playground
-    models: [],
-    selectedModel: '',
-    messages: [],
-    input: '',
-    sending: false,
-    // Logs
-    logs: [],
+    sidebarOpen: false,
+    page: 'overview',
+    showKeyModal: false,
+    keyInput: '',
+    navItems: [
+      { id: 'overview', label: 'Overview', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zm-10 9a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zm10-1a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1h-4a1 1 0 01-1-1v-5z"/></svg>' },
+      { id: 'playground', label: 'Playground', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>' },
+      { id: 'logs', label: 'Logs', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>' },
+      { id: 'cache', label: 'Cache', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>' },
+      { id: 'tenants', label: 'Tenants', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>' },
+      { id: 'prompts', label: 'Prompts', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>' },
+      { id: 'settings', label: 'Settings', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>' },
+    ],
+    stats: {}, providers: [], models: [],
+    selectedModel: '', messages: [], input: '', sending: false,
+    lastUsage: null,
+    logs: [], logFilter: { status: '', model: '' },
+    logPage: 0, logPageSize: 50, expandedLog: null, logsLoading: false,
+    cacheStats: {},
+    tenants: [], showTenantForm: false,
+    tenantForm: { api_key: '', name: '', rpm_limit: 60, daily_budget_usd: 0 },
+    prompts: [], showPromptForm: false,
+    promptForm: { name: '', model: '', ab_weight: 1.0, messages_raw: '' },
+    routingStrategy: '',
+    statsLoading: true,
+    autoRefresh: false, _refreshTimer: null,
     async fetchStats() {
-      this.stats = await (await authedFetch('/api/admin/stats')).json();
-      this.providers = await (await authedFetch('/api/admin/providers')).json();
-      const modelsResp = await (await authedFetch('/v1/models')).json();
-      this.models = modelsResp.data || [];
-      if (this.models.length && !this.selectedModel) this.selectedModel = this.models[0].id;
-      this.$nextTick(() => this.renderChart());
+      this.statsLoading = true;
+      try {
+        this.stats = await (await authedFetch('/api/admin/stats')).json();
+        this.providers = await (await authedFetch('/api/admin/providers')).json();
+        const modelsResp = await (await authedFetch('/v1/models')).json();
+        this.models = modelsResp.data || [];
+        if (this.models.length && !this.selectedModel) this.selectedModel = this.models[0].id;
+        const routing = await (await authedFetch('/api/admin/config/routing')).json();
+        this.routingStrategy = routing.strategy || '';
+        this.$nextTick(() => this.renderChart());
+      } catch(e) { console.error('fetchStats:', e); }
+      this.statsLoading = false;
     },
     _chart: null,
     renderChart() {
@@ -185,36 +507,52 @@ function app() {
       if (!ctx || !this.stats.daily) return;
       if (this._chart) this._chart.destroy();
       const days = this.stats.daily.slice().reverse();
+      const dark = isDark();
       this._chart = new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: days.map(d => d.day),
-          datasets: [{label: 'Cost ($)', data: days.map(d => d.cost||0), backgroundColor: 'rgba(59,130,246,0.5)'}]
+          labels: days.map(d => d.day?.slice(5)),
+          datasets: [{
+            label: 'Cost ($)',
+            data: days.map(d => d.cost || 0),
+            backgroundColor: dark ? 'rgba(6, 182, 212, 0.4)' : 'rgba(14, 116, 144, 0.3)',
+            borderColor: dark ? 'rgba(6, 182, 212, 0.8)' : 'rgba(14, 116, 144, 0.7)',
+            borderWidth: 1, borderRadius: 4,
+          }]
         },
-        options: {responsive: true, plugins: {legend: {display: false}}}
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { color: dark ? 'rgba(51,65,85,0.3)' : 'rgba(226,232,240,0.8)' }, ticks: { color: dark ? '#64748b' : '#94a3b8', font: { size: 10 } } },
+            y: { grid: { color: dark ? 'rgba(51,65,85,0.3)' : 'rgba(226,232,240,0.8)' }, ticks: { color: dark ? '#64748b' : '#94a3b8', font: { size: 10 } } }
+          }
+        }
       });
     },
     async sendMessage() {
       if (!this.input.trim() || this.sending) return;
-      this.messages.push({role: 'user', content: this.input});
-      const userMsg = this.input;
+      this.messages.push({ role: 'user', content: this.input });
       this.input = '';
       this.sending = true;
-      this.messages.push({role: 'assistant', content: ''});
+      this.lastUsage = null;
+      this.messages.push({ role: 'assistant', content: '' });
       const idx = this.messages.length - 1;
+      const start = performance.now();
+      let usage = null;
       try {
         const resp = await authedFetch('/v1/chat/completions', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({model: this.selectedModel, messages: this.messages.slice(0,-1).map(m=>({role:m.role,content:m.content})), stream: true})
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: this.selectedModel, messages: this.messages.slice(0, -1).map(m => ({ role: m.role, content: m.content })), stream: true })
         });
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
         while (true) {
-          const {done, value} = await reader.read();
+          const { done, value } = await reader.read();
           if (done) break;
-          buf += decoder.decode(value, {stream: true});
+          buf += decoder.decode(value, { stream: true });
           const lines = buf.split('\n');
           buf = lines.pop();
           for (const line of lines) {
@@ -225,20 +563,90 @@ function app() {
               const chunk = JSON.parse(d);
               const content = chunk.choices?.[0]?.delta?.content;
               if (content) this.messages[idx].content += content;
+              if (chunk.usage) usage = chunk.usage;
             } catch {}
           }
         }
       } catch (e) {
         this.messages[idx].content = 'Error: ' + e.message;
       }
+      const latency = Math.round(performance.now() - start);
+      if (usage) {
+        const cost = (usage.prompt_tokens * 0.5 + usage.completion_tokens * 1.5) / 1_000_000;
+        this.lastUsage = { ...usage, latency, cost };
+      } else {
+        this.lastUsage = { prompt_tokens: 0, completion_tokens: 0, latency, cost: 0 };
+      }
       this.sending = false;
+      this.$nextTick(() => { const box = document.getElementById('chatBox'); if (box) box.scrollTop = box.scrollHeight; });
     },
     async fetchLogs() {
-      this.logs = await (await authedFetch('/api/admin/logs?limit=100')).json();
-    }
+      this.logsLoading = true;
+      const params = new URLSearchParams({ limit: String(this.logPageSize), offset: String(this.logPage * this.logPageSize) });
+      if (this.logFilter.status) params.set('status', this.logFilter.status);
+      if (this.logFilter.model) params.set('model', this.logFilter.model);
+      this.logs = await (await authedFetch('/api/admin/logs?' + params)).json();
+      this.logsLoading = false;
+    },
+    async fetchCacheStats() {
+      this.cacheStats = await (await authedFetch('/api/admin/cache/stats')).json();
+    },
+    async fetchTenants() {
+      this.tenants = await (await authedFetch('/api/admin/tenants')).json();
+    },
+    async createTenant() {
+      await authedFetch('/api/admin/tenants', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.tenantForm)
+      });
+      this.tenantForm = { api_key: '', name: '', rpm_limit: 60, daily_budget_usd: 0 };
+      this.showTenantForm = false;
+      this.fetchTenants();
+    },
+    async fetchPrompts() {
+      this.prompts = await (await authedFetch('/api/admin/prompts')).json();
+    },
+    async createPrompt() {
+      let messages = [];
+      try { messages = JSON.parse(this.promptForm.messages_raw); } catch { alert('Invalid JSON'); return; }
+      await authedFetch('/api/admin/prompts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: this.promptForm.name, model: this.promptForm.model, ab_weight: this.promptForm.ab_weight, messages })
+      });
+      this.promptForm = { name: '', model: '', ab_weight: 1.0, messages_raw: '' };
+      this.showPromptForm = false;
+      this.fetchPrompts();
+    },
+    async deletePrompt(id) {
+      if (!confirm('Deactivate this prompt?')) return;
+      await authedFetch('/api/admin/prompts/' + id, { method: 'DELETE' });
+      this.fetchPrompts();
+    },
+    async setRouting(strategy) {
+      await authedFetch('/api/admin/config/routing?strategy=' + strategy, { method: 'POST' });
+      this.routingStrategy = strategy;
+    },
+    saveKey() {
+      if (this.keyInput) localStorage.setItem('gateway_key', this.keyInput);
+      this.keyInput = '';
+      this.showKeyModal = false;
+      this.fetchStats();
+    },
+    changeKey() {
+      this.showKeyModal = true;
+    },
+    toggleAutoRefresh() {
+      this.autoRefresh = !this.autoRefresh;
+      if (this._refreshTimer) { clearInterval(this._refreshTimer); this._refreshTimer = null; }
+      if (this.autoRefresh) {
+        this._refreshTimer = setInterval(() => {
+          if (this.page === 'overview') this.fetchStats();
+          else if (this.page === 'logs') this.fetchLogs();
+        }, 15000);
+      }
+    },
   }
 }
 </script>
-
 </body>
 </html>
