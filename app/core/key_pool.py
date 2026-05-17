@@ -1,12 +1,18 @@
 import time
-from datetime import datetime
 
 
 class KeyPool:
     def __init__(self, keys: list[str]):
-        self._keys = keys
+        self._keys = [k for k in keys if k]
         self._index = 0
         self._disabled: dict[str, float] = {}
+
+    @classmethod
+    def from_csv(cls, csv: str) -> "KeyPool":
+        return cls([k.strip() for k in csv.split(",") if k.strip()])
+
+    def __bool__(self) -> bool:
+        return bool(self._keys)
 
     def next_key(self) -> str:
         now = time.time()

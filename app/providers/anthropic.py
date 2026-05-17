@@ -5,6 +5,7 @@ from typing import AsyncIterator
 
 import httpx
 
+from app.core.key_pool import KeyPool
 from app.providers.base import ProviderBase
 from app.config import settings
 from app.schemas.chat import (
@@ -43,15 +44,26 @@ class AnthropicProvider(ProviderBase):
 
     def __init__(self):
         self.base_url = settings.anthropic_base_url.rstrip("/")
-        self.api_key = settings.anthropic_api_key
+        keys = [k.strip() for k in (settings.anthropic_api_key or "").split(",") if k.strip()]
+        self.key_pool = KeyPool(keys) if keys else None
+        self.api_key = keys[0] if keys else ""
         self.client = httpx.AsyncClient(timeout=60.0)
 
-    def _headers(self) -> dict:
+    def _next_key(self) -> str:
+        if self.key_pool:
+            return self.key_pool.next_key()
+        return self.api_key
+
+    def _headers(self, api_key: str) -> dict:
         return {
-            "x-api-key": self.api_key,
+            "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+
+    def _maybe_disable_key(self, key: str, status_code: int):
+        if self.key_pool and status_code in (401, 403, 429):
+            self.key_pool.disable_key(key, seconds=60)
 
     def _build_payload(self, request: ChatCompletionRequest) -> dict:
         system = None
@@ -77,8 +89,13 @@ class AnthropicProvider(ProviderBase):
         url = f"{self.base_url}/v1/messages"
         payload = self._build_payload(request)
 
-        resp = await self.client.post(url, json=payload, headers=self._headers())
-        resp.raise_for_status()
+        key = self._next_key()
+        try:
+            resp = await self.client.post(url, json=payload, headers=self._headers(key))
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            self._maybe_disable_key(key, e.response.status_code)
+            raise
         data = resp.json()
 
         content = ""
@@ -118,10 +135,15 @@ class AnthropicProvider(ProviderBase):
         output_tokens = 0
         finish_reason = "stop"
 
+        key = self._next_key()
         async with self.client.stream(
-            "POST", url, json=payload, headers=self._headers()
+            "POST", url, json=payload, headers=self._headers(key)
         ) as resp:
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                self._maybe_disable_key(key, e.response.status_code)
+                raise
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue

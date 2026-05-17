@@ -16,7 +16,7 @@ class OllamaProvider(OpenAICompatibleProvider):
         )
         self._models_cache: list[dict] = []
 
-    def _headers(self) -> dict:
+    def _headers(self, api_key: str) -> dict:
         return {"Content-Type": "application/json"}
 
     async def refresh_models(self):
