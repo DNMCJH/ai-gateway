@@ -17,6 +17,8 @@ from app.schemas.chat import (
     Usage,
     ChunkChoice,
     ChunkDelta,
+    ToolCall,
+    FunctionCall,
 )
 
 EMPTY_DELTA = ChunkDelta()
@@ -71,8 +73,25 @@ class AnthropicProvider(ProviderBase):
         for m in request.messages:
             if m.role == "system":
                 system = m.content
+            elif m.role == "tool":
+                messages.append({
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": m.tool_call_id, "content": m.content or ""}],
+                })
+            elif m.role == "assistant" and m.tool_calls:
+                content = []
+                if m.content:
+                    content.append({"type": "text", "text": m.content})
+                for tc in m.tool_calls:
+                    content.append({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments,
+                    })
+                messages.append({"role": "assistant", "content": content})
             else:
-                messages.append({"role": m.role, "content": m.content})
+                messages.append({"role": m.role, "content": m.content or ""})
 
         payload = {
             "model": request.model,
@@ -83,6 +102,19 @@ class AnthropicProvider(ProviderBase):
         }
         if system:
             payload["system"] = system
+        if request.tools:
+            payload["tools"] = [
+                {"name": t.function.name, "description": t.function.description, "input_schema": t.function.parameters}
+                for t in request.tools
+            ]
+        if request.tool_choice is not None:
+            tc = request.tool_choice
+            if tc == "auto":
+                payload["tool_choice"] = {"type": "auto"}
+            elif tc == "none":
+                payload["tool_choice"] = {"type": "none"}
+            elif isinstance(tc, dict) and tc.get("function"):
+                payload["tool_choice"] = {"type": "tool", "name": tc["function"]["name"]}
         return payload
 
     async def chat(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
@@ -99,11 +131,27 @@ class AnthropicProvider(ProviderBase):
         data = resp.json()
 
         content = ""
+        tool_calls = []
         for block in data.get("content", []):
             if block.get("type") == "text":
                 content += block.get("text", "")
+            elif block.get("type") == "tool_use":
+                tool_calls.append(
+                    ToolCall(
+                        id=block["id"],
+                        type="function",
+                        function=FunctionCall(
+                            name=block["name"],
+                            arguments=json.dumps(block.get("input", {})),
+                        ),
+                    )
+                )
 
         usage_data = data.get("usage", {})
+        finish_reason = FINISH_REASON_MAP.get(data.get("stop_reason"), "stop")
+        if data.get("stop_reason") == "tool_use":
+            finish_reason = "tool_calls"
+
         return ChatCompletionResponse(
             id=f"chatcmpl-{data.get('id', uuid.uuid4().hex[:8])}",
             created=int(time.time()),
@@ -111,8 +159,12 @@ class AnthropicProvider(ProviderBase):
             choices=[
                 Choice(
                     index=0,
-                    message=ChoiceMessage(role="assistant", content=content),
-                    finish_reason=FINISH_REASON_MAP.get(data.get("stop_reason"), "stop"),
+                    message=ChoiceMessage(
+                        role="assistant",
+                        content=content or None,
+                        tool_calls=tool_calls or None,
+                    ),
+                    finish_reason=finish_reason,
                 )
             ],
             usage=Usage(
@@ -134,6 +186,10 @@ class AnthropicProvider(ProviderBase):
         input_tokens = 0
         output_tokens = 0
         finish_reason = "stop"
+        tool_call_index = -1
+        current_tool_id = None
+        current_tool_name = None
+        current_tool_input = ""
 
         key = self._next_key()
         async with self.client.stream(
@@ -154,45 +210,47 @@ class AnthropicProvider(ProviderBase):
                     usage = data.get("message", {}).get("usage", {})
                     input_tokens = usage.get("input_tokens", 0)
                     output_tokens = usage.get("output_tokens", 0)
+                elif event_type == "content_block_start":
+                    block = data.get("content_block", {})
+                    if block.get("type") == "tool_use":
+                        tool_call_index += 1
+                        current_tool_id = block.get("id", "")
+                        current_tool_name = block.get("name", "")
+                        current_tool_input = ""
+                        yield ChatCompletionChunk(
+                            id=completion_id, created=created, model=request.model,
+                            choices=[ChunkChoice(index=0, delta=ChunkDelta(
+                                tool_calls=[{"index": tool_call_index, "id": current_tool_id, "type": "function", "function": {"name": current_tool_name, "arguments": ""}}]
+                            ))],
+                        )
                 elif event_type == "content_block_delta":
                     delta = data.get("delta", {})
                     if delta.get("type") == "text_delta":
                         yield ChatCompletionChunk(
-                            id=completion_id,
-                            created=created,
-                            model=request.model,
-                            choices=[
-                                ChunkChoice(
-                                    index=0,
-                                    delta=ChunkDelta(content=delta.get("text", "")),
-                                )
-                            ],
+                            id=completion_id, created=created, model=request.model,
+                            choices=[ChunkChoice(index=0, delta=ChunkDelta(content=delta.get("text", "")))],
+                        )
+                    elif delta.get("type") == "input_json_delta":
+                        partial = delta.get("partial_json", "")
+                        yield ChatCompletionChunk(
+                            id=completion_id, created=created, model=request.model,
+                            choices=[ChunkChoice(index=0, delta=ChunkDelta(
+                                tool_calls=[{"index": tool_call_index, "function": {"arguments": partial}}]
+                            ))],
                         )
                 elif event_type == "message_delta":
                     delta = data.get("delta", {})
                     stop_reason = delta.get("stop_reason")
                     if stop_reason:
-                        finish_reason = FINISH_REASON_MAP.get(stop_reason, "stop")
+                        finish_reason = "tool_calls" if stop_reason == "tool_use" else FINISH_REASON_MAP.get(stop_reason, "stop")
                     usage = data.get("usage", {})
                     if "output_tokens" in usage:
                         output_tokens = usage["output_tokens"]
                 elif event_type == "message_stop":
                     yield ChatCompletionChunk(
-                        id=completion_id,
-                        created=created,
-                        model=request.model,
-                        choices=[
-                            ChunkChoice(
-                                index=0,
-                                delta=EMPTY_DELTA,
-                                finish_reason=finish_reason,
-                            )
-                        ],
-                        usage=Usage(
-                            prompt_tokens=input_tokens,
-                            completion_tokens=output_tokens,
-                            total_tokens=input_tokens + output_tokens,
-                        ),
+                        id=completion_id, created=created, model=request.model,
+                        choices=[ChunkChoice(index=0, delta=EMPTY_DELTA, finish_reason=finish_reason)],
+                        usage=Usage(prompt_tokens=input_tokens, completion_tokens=output_tokens, total_tokens=input_tokens + output_tokens),
                     )
 
     def list_models(self) -> list[dict]:

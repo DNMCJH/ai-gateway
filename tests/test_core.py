@@ -9,7 +9,7 @@ from app.core.router import (
     CapabilityBasedStrategy, STRATEGIES,
 )
 from app.core.cache import _cache_key, _cosine_similarity
-from app.schemas.chat import ChatCompletionRequest, ChatMessage
+from app.schemas.chat import ChatCompletionRequest, ChatMessage, ToolDef, FunctionDef, ToolCall, FunctionCall
 
 
 # --- TokenBucketLimiter ---
@@ -199,3 +199,34 @@ class TestSmartRouter:
         req = ChatCompletionRequest(model="auto", messages=[ChatMessage(role="user", content="hi")])
         provider, _ = router.route(req, [p2, p1], strategy_name="cost")
         assert provider.name == "cheap"
+
+
+# --- Tool Calling Schema ---
+
+class TestToolCallingSchema:
+    def test_request_with_tools(self):
+        tool = ToolDef(function=FunctionDef(name="get_weather", description="Get weather", parameters={"type": "object", "properties": {"city": {"type": "string"}}}))
+        req = ChatCompletionRequest(
+            model="gpt-4", messages=[ChatMessage(role="user", content="weather?")],
+            tools=[tool], tool_choice="auto"
+        )
+        assert req.tools[0].function.name == "get_weather"
+        assert req.tool_choice == "auto"
+
+    def test_message_with_tool_calls(self):
+        msg = ChatMessage(
+            role="assistant", content="",
+            tool_calls=[ToolCall(id="call_1", function=FunctionCall(name="get_weather", arguments='{"city":"Beijing"}'))]
+        )
+        assert msg.tool_calls[0].function.name == "get_weather"
+        assert msg.tool_calls[0].id == "call_1"
+
+    def test_tool_result_message(self):
+        msg = ChatMessage(role="tool", content="Sunny, 25C", tool_call_id="call_1")
+        assert msg.role == "tool"
+        assert msg.tool_call_id == "call_1"
+
+    def test_request_without_tools(self):
+        req = ChatCompletionRequest(model="gpt-4", messages=[ChatMessage(role="user", content="hi")])
+        assert req.tools is None
+        assert req.tool_choice is None

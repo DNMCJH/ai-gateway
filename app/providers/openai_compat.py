@@ -16,6 +16,8 @@ from app.schemas.chat import (
     Usage,
     ChunkChoice,
     ChunkDelta,
+    ToolCall,
+    FunctionCall,
 )
 
 
@@ -51,13 +53,17 @@ class OpenAICompatibleProvider(ProviderBase):
     def _build_payload(self, request: ChatCompletionRequest) -> dict:
         payload = {
             "model": request.model,
-            "messages": [m.model_dump() for m in request.messages],
+            "messages": [m.model_dump(exclude_none=True) for m in request.messages],
             "temperature": request.temperature,
             "top_p": request.top_p,
             "stream": request.stream,
         }
         if request.max_tokens is not None:
             payload["max_tokens"] = request.max_tokens
+        if request.tools:
+            payload["tools"] = [t.model_dump() for t in request.tools]
+        if request.tool_choice is not None:
+            payload["tool_choice"] = request.tool_choice
         return payload
 
     async def chat(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
@@ -74,21 +80,39 @@ class OpenAICompatibleProvider(ProviderBase):
             raise
         data = resp.json()
 
+        choices = []
+        for c in data.get("choices", []):
+            msg = c["message"]
+            tool_calls = None
+            if msg.get("tool_calls"):
+                tool_calls = [
+                    ToolCall(
+                        id=tc["id"],
+                        type=tc.get("type", "function"),
+                        function=FunctionCall(
+                            name=tc["function"]["name"],
+                            arguments=tc["function"]["arguments"],
+                        ),
+                    )
+                    for tc in msg["tool_calls"]
+                ]
+            choices.append(
+                Choice(
+                    index=c.get("index", 0),
+                    message=ChoiceMessage(
+                        role=msg["role"],
+                        content=msg.get("content") or "",
+                        tool_calls=tool_calls,
+                    ),
+                    finish_reason=c.get("finish_reason"),
+                )
+            )
+
         return ChatCompletionResponse(
             id=data.get("id", f"chatcmpl-{uuid.uuid4().hex[:8]}"),
             created=data.get("created", int(time.time())),
             model=data.get("model", request.model),
-            choices=[
-                Choice(
-                    index=c.get("index", 0),
-                    message=ChoiceMessage(
-                        role=c["message"]["role"],
-                        content=c["message"].get("content", ""),
-                    ),
-                    finish_reason=c.get("finish_reason"),
-                )
-                for c in data.get("choices", [])
-            ],
+            choices=choices,
             usage=Usage(
                 prompt_tokens=data.get("usage", {}).get("prompt_tokens", 0),
                 completion_tokens=data.get("usage", {}).get("completion_tokens", 0),
@@ -130,6 +154,7 @@ class OpenAICompatibleProvider(ProviderBase):
                             delta=ChunkDelta(
                                 role=delta.get("role"),
                                 content=delta.get("content"),
+                                tool_calls=delta.get("tool_calls"),
                             ),
                             finish_reason=c.get("finish_reason"),
                         )
