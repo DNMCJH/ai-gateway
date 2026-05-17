@@ -26,15 +26,38 @@ ROUTE_ALIASES = {
 }
 
 
+def _truncate(s: str, limit: int) -> str:
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"...[truncated {len(s) - limit} chars]"
+
+
+def _serialize_request_body(request: ChatCompletionRequest) -> str | None:
+    if not settings.log_request_body:
+        return None
+    body = json.dumps(request.model_dump(), ensure_ascii=False)
+    return _truncate(body, settings.body_log_max_chars)
+
+
+def _serialize_response_body(content: str) -> str | None:
+    if not settings.log_response_body:
+        return None
+    return _truncate(content, settings.body_log_max_chars)
+
+
 def _resolve_route(request):
     """Return the provider and resolved model id. Rewrites alias models in-place."""
     if request.model in ROUTE_ALIASES:
         providers = registry.available_providers()
         if not providers:
             raise HTTPException(status_code=503, detail="No providers available")
+        # Skip rate-limited providers when auto-routing; routing to one that
+        # would 429 below is wasteful. Fall back to full list only if all are saturated.
+        with_capacity = [p for p in providers if limiter.remaining(p.name) >= 1]
+        candidates = with_capacity or providers
         strategy_override = ROUTE_ALIASES[request.model]
         try:
-            provider, model_id = smart_router.route(request, providers, strategy_override)
+            provider, model_id = smart_router.route(request, candidates, strategy_override)
         except ValueError as e:
             raise HTTPException(status_code=503, detail=str(e))
         request.model = model_id
@@ -53,12 +76,18 @@ def _get_fallbacks(primary):
 async def _stream_response(provider, request, fallbacks, request_id):
     input_tokens = 0
     output_tokens = 0
+    accumulated_content = []
+    request_body = _serialize_request_body(request)
     start = time.monotonic()
     try:
         async for chunk in stream_with_fallback(provider, request, fallbacks):
             if chunk.usage:
                 input_tokens = chunk.usage.prompt_tokens
                 output_tokens = chunk.usage.completion_tokens
+            if settings.log_response_body:
+                for c in chunk.choices:
+                    if c.delta.content:
+                        accumulated_content.append(c.delta.content)
             yield json.dumps(chunk.model_dump(exclude_none=True), ensure_ascii=False)
         yield "[DONE]"
         latency = int((time.monotonic() - start) * 1000)
@@ -67,12 +96,15 @@ async def _stream_response(provider, request, fallbacks, request_id):
             request_id=request_id, model=request.model, provider=provider.name,
             input_tokens=input_tokens, output_tokens=output_tokens,
             cost_usd=cost, latency_ms=latency, status="success",
+            request_body=request_body,
+            response_body=_serialize_response_body("".join(accumulated_content)),
         )
     except Exception as e:
         latency = int((time.monotonic() - start) * 1000)
         await log_call(
             request_id=request_id, model=request.model, provider=provider.name,
             latency_ms=latency, status="error", error_message=str(e),
+            request_body=request_body,
         )
 
 
@@ -91,16 +123,20 @@ async def chat_completions(request: ChatCompletionRequest):
             _stream_response(provider, request, fallbacks, request_id)
         )
 
+    request_body = _serialize_request_body(request)
     start = time.monotonic()
     try:
         response = await with_retry(provider, request, fallbacks)
         latency = int((time.monotonic() - start) * 1000)
         usage = response.usage
         cost = calculate_cost(request.model, usage.prompt_tokens, usage.completion_tokens)
+        content = response.choices[0].message.content if response.choices else ""
         await log_call(
             request_id=request_id, model=request.model, provider=provider.name,
             input_tokens=usage.prompt_tokens, output_tokens=usage.completion_tokens,
             cost_usd=cost, latency_ms=latency, status="success",
+            request_body=request_body,
+            response_body=_serialize_response_body(content),
         )
         return response
     except Exception as e:
@@ -108,5 +144,6 @@ async def chat_completions(request: ChatCompletionRequest):
         await log_call(
             request_id=request_id, model=request.model, provider=provider.name,
             latency_ms=latency, status="error", error_message=str(e),
+            request_body=request_body,
         )
         raise HTTPException(status_code=502, detail=str(e))

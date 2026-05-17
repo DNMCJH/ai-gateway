@@ -21,7 +21,7 @@ class OllamaProvider(OpenAICompatibleProvider):
 
     async def refresh_models(self):
         try:
-            resp = await self.client.get(f"{self.base_url}/api/tags")
+            resp = await self.client.get(f"{self.base_url}/api/tags", timeout=2.0)
             resp.raise_for_status()
             data = resp.json()
             self._models_cache = [
@@ -39,7 +39,7 @@ class OllamaProvider(OpenAICompatibleProvider):
 
     async def is_available(self) -> bool:
         try:
-            resp = await self.client.get(f"{self.base_url}/api/tags")
+            resp = await self.client.get(f"{self.base_url}/api/tags", timeout=1.0)
             return resp.status_code == 200
         except Exception:
             return False
