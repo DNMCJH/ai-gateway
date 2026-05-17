@@ -18,6 +18,8 @@ from app.schemas.chat import (
     ChunkDelta,
 )
 
+EMPTY_DELTA = ChunkDelta()
+
 ANTHROPIC_MODELS = [
     {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "owned_by": "anthropic"},
     {"id": "claude-haiku-3-5-20241022", "name": "Claude 3.5 Haiku", "owned_by": "anthropic"},
@@ -112,6 +114,9 @@ class AnthropicProvider(ProviderBase):
 
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
         created = int(time.time())
+        input_tokens = 0
+        output_tokens = 0
+        finish_reason = "stop"
 
         async with self.client.stream(
             "POST", url, json=payload, headers=self._headers()
@@ -123,7 +128,11 @@ class AnthropicProvider(ProviderBase):
                 data = json.loads(line[6:])
                 event_type = data.get("type")
 
-                if event_type == "content_block_delta":
+                if event_type == "message_start":
+                    usage = data.get("message", {}).get("usage", {})
+                    input_tokens = usage.get("input_tokens", 0)
+                    output_tokens = usage.get("output_tokens", 0)
+                elif event_type == "content_block_delta":
                     delta = data.get("delta", {})
                     if delta.get("type") == "text_delta":
                         yield ChatCompletionChunk(
@@ -137,6 +146,14 @@ class AnthropicProvider(ProviderBase):
                                 )
                             ],
                         )
+                elif event_type == "message_delta":
+                    delta = data.get("delta", {})
+                    stop_reason = delta.get("stop_reason")
+                    if stop_reason:
+                        finish_reason = FINISH_REASON_MAP.get(stop_reason, "stop")
+                    usage = data.get("usage", {})
+                    if "output_tokens" in usage:
+                        output_tokens = usage["output_tokens"]
                 elif event_type == "message_stop":
                     yield ChatCompletionChunk(
                         id=completion_id,
@@ -145,10 +162,15 @@ class AnthropicProvider(ProviderBase):
                         choices=[
                             ChunkChoice(
                                 index=0,
-                                delta=ChunkDelta(),
-                                finish_reason="stop",
+                                delta=EMPTY_DELTA,
+                                finish_reason=finish_reason,
                             )
                         ],
+                        usage=Usage(
+                            prompt_tokens=input_tokens,
+                            completion_tokens=output_tokens,
+                            total_tokens=input_tokens + output_tokens,
+                        ),
                     )
 
     def list_models(self) -> list[dict]:

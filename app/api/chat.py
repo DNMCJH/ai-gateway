@@ -51,20 +51,21 @@ def _get_fallbacks(primary):
 
 
 async def _stream_response(provider, request, fallbacks, request_id):
-    total_output_tokens = 0
+    input_tokens = 0
+    output_tokens = 0
     start = time.monotonic()
     try:
         async for chunk in stream_with_fallback(provider, request, fallbacks):
-            for c in chunk.choices:
-                if c.delta.content:
-                    total_output_tokens += 1
-            yield json.dumps(chunk.model_dump(), ensure_ascii=False)
+            if chunk.usage:
+                input_tokens = chunk.usage.prompt_tokens
+                output_tokens = chunk.usage.completion_tokens
+            yield json.dumps(chunk.model_dump(exclude_none=True), ensure_ascii=False)
         yield "[DONE]"
         latency = int((time.monotonic() - start) * 1000)
-        cost = calculate_cost(request.model, 0, total_output_tokens)
+        cost = calculate_cost(request.model, input_tokens, output_tokens)
         await log_call(
             request_id=request_id, model=request.model, provider=provider.name,
-            input_tokens=0, output_tokens=total_output_tokens,
+            input_tokens=input_tokens, output_tokens=output_tokens,
             cost_usd=cost, latency_ms=latency, status="success",
         )
     except Exception as e:

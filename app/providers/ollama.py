@@ -7,6 +7,7 @@ from app.config import settings
 class OllamaProvider(OpenAICompatibleProvider):
     name = "ollama"
     display_name = "Ollama (Local)"
+    supports_stream_usage = False
 
     def __init__(self):
         super().__init__(

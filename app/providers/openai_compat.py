@@ -21,6 +21,10 @@ from app.schemas.chat import (
 class OpenAICompatibleProvider(ProviderBase):
     """Base for any provider with an OpenAI-compatible API."""
 
+    # Subclasses set False to opt out of sending stream_options.include_usage
+    # (some compat backends 400 on unknown fields).
+    supports_stream_usage: bool = True
+
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -81,6 +85,8 @@ class OpenAICompatibleProvider(ProviderBase):
         url = f"{self.base_url}/v1/chat/completions"
         payload = self._build_payload(request)
         payload["stream"] = True
+        if self.supports_stream_usage:
+            payload["stream_options"] = {"include_usage": True}
 
         async with self.client.stream(
             "POST", url, json=payload, headers=self._headers()
@@ -106,11 +112,22 @@ class OpenAICompatibleProvider(ProviderBase):
                             finish_reason=c.get("finish_reason"),
                         )
                     )
+
+                usage = None
+                if chunk.get("usage"):
+                    u = chunk["usage"]
+                    usage = Usage(
+                        prompt_tokens=u.get("prompt_tokens", 0),
+                        completion_tokens=u.get("completion_tokens", 0),
+                        total_tokens=u.get("total_tokens", 0),
+                    )
+
                 yield ChatCompletionChunk(
                     id=chunk.get("id", f"chatcmpl-{uuid.uuid4().hex[:8]}"),
                     created=chunk.get("created", int(time.time())),
                     model=chunk.get("model", request.model),
                     choices=choices,
+                    usage=usage,
                 )
 
     async def is_available(self) -> bool:

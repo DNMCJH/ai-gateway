@@ -59,3 +59,4 @@ class ChatCompletionChunk(BaseModel):
     created: int
     model: str
     choices: list[ChunkChoice]
+    usage: Optional[Usage] = None
