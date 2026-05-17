@@ -1,6 +1,6 @@
 # AI Gateway
 
-轻量级多模型 AI 推理网关
+生产级多模型 LLM 推理网关
 
 [English](README.md)
 
@@ -11,162 +11,128 @@ graph TB
     Client["客户端<br/>(curl / LangChain / Cursor / OpenAI SDK)"]
     
     subgraph Gateway["AI Gateway (FastAPI)"]
+        Auth["Bearer 认证<br/>多租户密钥"]
+        Cache["响应缓存<br/>精确匹配 + 语义匹配"]
+        Prompt["Prompt 注册中心<br/>版本管理 + A/B 测试"]
         API["/v1/chat/completions<br/>兼容 OpenAI 格式"]
         Router["智能路由<br/>轮询 · 成本优先 · 能力匹配"]
         Retry["重试 + 降级<br/>故障自动切换"]
-        Limiter["速率限制<br/>令牌桶算法"]
+        Limiter["速率限制<br/>按 Provider + 按租户"]
+        Budget["预算管控<br/>日限额 + 月限额"]
         
-        subgraph Providers["Provider 注册中心"]
+        subgraph Providers["Provider 注册中心（多 Key 轮转）"]
             DS[DeepSeek]
             OAI[OpenAI]
             Claude[Anthropic]
             Ollama[Ollama]
         end
         
-        DB["SQLite<br/>调用日志 · Token 统计 · 成本"]
-        Dashboard["Web 管理面板<br/>统计 · Playground · 日志"]
+        DB["SQLite (WAL)<br/>调用日志 · 成本 · 缓存 · 租户 · Prompt"]
+        Dashboard["Web 仪表盘<br/>统计 · Playground · 日志"]
     end
     
-    Client --> API
+    Client --> Auth
+    Auth --> Cache
+    Cache --> Prompt
+    Prompt --> API
     API --> Router
     Router --> Retry
     Retry --> Limiter
-    Limiter --> Providers
+    Limiter --> Budget
+    Budget --> Providers
     API --> DB
     Dashboard --> DB
 ```
 
-## 功能
+## 功能特性
 
-- **统一 API** — 兼容 OpenAI 格式 `/v1/chat/completions`，任何 OpenAI SDK 客户端可直接对接
-- **多模型接入** — DeepSeek、OpenAI、Anthropic (Claude)、Ollama (本地模型)
-- **真实 SSE 流式** — 逐 token 流式输出，非缓冲
-- **智能路由** — 支持轮询 / 成本优先 / 能力匹配三种策略
-- **自动降级** — 主模型故障时透明切换备选模型
-- **速率限制** — 令牌桶算法，按 Provider 限流
-- **成本追踪** — 按模型实际定价计算每次调用成本
-- **调用日志** — SQLite 记录每次调用的 Token 用量和延迟
-- **Web 管理面板** — 统计图表、Playground 对话测试、调用日志查看
+### 核心能力
+- **统一 API** — 兼容 OpenAI 的 `/v1/chat/completions`，任何 OpenAI SDK 客户端直接对接
+- **多 Provider** — DeepSeek、OpenAI、Anthropic (Claude)、Ollama (本地模型)
+- **真实 SSE 流式** — 逐 token 流式输出，带准确的 usage 统计
+- **智能路由** — 轮询、成本优先、能力匹配三种策略
+- **自动降级** — 主模型失败时透明切换到备用 Provider
+- **模型别名** — `auto`、`best`、`cheapest` 自动解析为具体 Provider+模型
+
+### 性能与可靠性
+- **响应缓存** — SHA256 精确匹配，可配置 TTL，命中时零延迟零成本
+- **语义缓存** — 可选的 embedding 相似度匹配（DeepSeek embeddings，阈值 0.92）
+- **Key 轮转** — 每个 Provider 支持 CSV 多 Key，轮询 + 401/403/429 自动熔断 60 秒
+- **WAL 数据库** — 单 writer 任务 + asyncio 队列，WAL 模式支持并发读
+- **优雅关闭** — 退出时关闭所有 httpx 连接，排空 DB 写入队列
+
+### 多租户与成本管控
+- **Bearer 认证** — Gateway API Key 保护，开发模式可关闭
+- **租户级限流** — 每个 Gateway Key 独立 RPM 限制
+- **预算上限** — 日/月消费上限，超限自动拒绝请求
+- **成本追踪** — 按模型计价，按调用计费，消费看板
+
+### Prompt 管理
+- **Prompt 注册中心** — 命名 Prompt 模板，带版本历史
+- **A/B 测试** — 多版本加权随机分流
+- **Prompt 引用** — 请求中传 `prompt_id` 替代原始 messages
+
+### 可观测性
+- **调用日志** — 请求/响应体记录（可选开启，自动截断）
+- **Web 仪表盘** — 统计、成本图表、Provider 状态、Playground、调用日志
+- **Admin API** — 租户、Prompt、缓存、路由策略的完整 CRUD
 
 ## 快速开始
 
 ```bash
 git clone https://github.com/DNMCJH/ai-gateway.git
 cd ai-gateway
-
-python -m venv venv
-# Linux/Mac:
-source venv/bin/activate
-# Windows:
-.\venv\Scripts\activate
-
-pip install -r requirements.txt
-
 cp .env.example .env
 # 编辑 .env 填入你的 API Key
+docker compose up -d --build
+```
 
-# 启动
+打开 `http://localhost:8000/dashboard` 查看仪表盘。
+
+### 不用 Docker
+
+```bash
+python -m venv venv && source venv/bin/activate  # Windows: .\venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env  # 编辑填入 Key
 python -m uvicorn app.main:app --host 0.0.0.0 --port 9001
 ```
 
-打开 `http://localhost:9001/dashboard` 进入管理面板。
+## 配置说明
 
-## Docker 部署
+`.env` 关键配置项：
 
-```bash
-cp .env.example .env  # 编辑填入 API Key
-docker-compose up -d
+```env
+# Provider Key（逗号分隔支持多 Key 轮转）
+DEEPSEEK_API_KEY=sk-key1,sk-key2,sk-key3
+OPENAI_API_KEY=sk-xxx
+ANTHROPIC_API_KEY=sk-ant-xxx
+
+# 网关认证（逗号分隔，留空=关闭认证）
+GATEWAY_API_KEYS_RAW=your-secret-key-1,your-secret-key-2
+
+# 路由策略
+DEFAULT_ROUTING_STRATEGY=round-robin  # round-robin | cost | capability
+RATE_LIMIT_RPM=60
+
+# 缓存
+CACHE_ENABLED=true
+CACHE_TTL_SECONDS=3600
+SEMANTIC_CACHE_ENABLED=false
+SEMANTIC_CACHE_THRESHOLD=0.92
+
+# 日志（默认关闭——请求体可能含敏感信息）
+LOG_REQUEST_BODY=false
+LOG_RESPONSE_BODY=false
 ```
-
-## 远程部署 (Cloudflare Tunnel)
-
-如果服务器没有公网 IP，可以用 Cloudflare Tunnel 暴露服务：
-
-```bash
-# 启动服务
-python -m uvicorn app.main:app --host 0.0.0.0 --port 9001
-
-# 另开终端，启动 tunnel
-cloudflared tunnel --url http://localhost:9001
-```
-
-访问 tunnel 输出的 `https://xxx.trycloudflare.com/dashboard` 即可。
-
-## API 使用
-
-### 对话补全
-
-```bash
-curl http://localhost:9001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-chat",
-    "messages": [{"role": "user", "content": "你好！"}]
-  }'
-```
-
-### 流式输出
-
-```bash
-curl http://localhost:9001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-chat",
-    "messages": [{"role": "user", "content": "你好！"}],
-    "stream": true
-  }'
-```
-
-### 智能路由
-
-```bash
-# 使用 "auto" 让网关自动选择最优模型
-curl http://localhost:9001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "auto",
-    "messages": [{"role": "user", "content": "写一个 Python 函数"}]
-  }'
-```
-
-### 管理接口
-
-```bash
-curl http://localhost:9001/v1/models                 # 模型列表
-curl http://localhost:9001/api/admin/stats            # 聚合统计
-curl http://localhost:9001/api/admin/logs             # 调用日志
-curl http://localhost:9001/api/admin/providers        # Provider 状态
-curl http://localhost:9001/api/admin/config/routing   # 路由策略
-```
-
-## 支持的模型
-
-| Provider | 模型 | 定价 (每 1M tokens) |
-|----------|------|-------------------|
-| DeepSeek | deepseek-chat, deepseek-reasoner | $0.14 - $2.19 |
-| OpenAI | gpt-4o, gpt-4o-mini, gpt-3.5-turbo | $0.15 - $10.00 |
-| Anthropic | claude-sonnet-4, claude-3.5-haiku | $0.80 - $15.00 |
-| Ollama | (自动发现本地模型) | 免费 |
-
-## 设计决策
-
-1. **Provider 抽象 + AsyncIterator** — 流式接口使用 `AsyncIterator`，与 FastAPI 的 `EventSourceResponse` 天然组合，背压处理简洁。
-
-2. **无状态网关** — 不存储对话历史，网关只做转发。水平扩展友好，与 OpenAI API 设计一致。
-
-3. **首 Chunk 超时降级** — 流式场景无法中途切换 Provider。通过设置首 chunk 超时，在数据到达客户端前完成 fallback 切换。
-
-4. **Strategy 模式路由** — 路由策略可插拔，新增策略只需实现一个类，路由器不感知具体策略。
-
-5. **OpenAI 兼容 API** — 任何支持 OpenAI 的工具（LangChain、Cursor 等）可直接对接，零改造。
 
 ## 技术栈
 
 - **后端**: Python, FastAPI, httpx, aiosqlite, sse-starlette
 - **前端**: HTML, Tailwind CSS, Alpine.js, Chart.js
-- **数据库**: SQLite
-- **部署**: Docker, docker-compose, Cloudflare Tunnel
+- **数据库**: SQLite (WAL 模式)
+- **部署**: Docker, docker-compose
 
-## 许可证
+## License
 
 MIT
