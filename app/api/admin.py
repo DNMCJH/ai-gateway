@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.auth import require_api_key
@@ -46,7 +46,7 @@ async def providers():
 @router.post("/config/routing")
 async def set_routing(strategy: str):
     if strategy not in STRATEGIES:
-        return {"error": f"Unknown strategy. Available: {list(STRATEGIES.keys())}"}
+        raise HTTPException(status_code=400, detail=f"Unknown strategy. Available: {list(STRATEGIES.keys())}")
     smart_router.set_strategy(strategy)
     return {"strategy": strategy}
 

@@ -179,11 +179,13 @@ function app() {
       if (this.models.length && !this.selectedModel) this.selectedModel = this.models[0].id;
       this.$nextTick(() => this.renderChart());
     },
+    _chart: null,
     renderChart() {
       const ctx = document.getElementById('costChart');
       if (!ctx || !this.stats.daily) return;
+      if (this._chart) this._chart.destroy();
       const days = this.stats.daily.slice().reverse();
-      new Chart(ctx, {
+      this._chart = new Chart(ctx, {
         type: 'bar',
         data: {
           labels: days.map(d => d.day),

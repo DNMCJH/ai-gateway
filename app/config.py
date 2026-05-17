@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     semantic_cache_enabled: bool = False
     semantic_cache_threshold: float = 0.92
 
+    # Provider timeout
+    provider_timeout: float = 60.0
+
+    # Retry
+    max_retries: int = 2
+    first_chunk_timeout: float = 10.0
+
+    # Cache eviction
+    cache_eviction_interval: int = 600
+
     model_config = {"env_file": ".env"}
 
 

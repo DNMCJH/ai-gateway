@@ -42,15 +42,15 @@ async def get_tenant(api_key: str) -> Optional[TenantInfo]:
 async def get_tenant_spend(api_key: str) -> dict:
     async with aiosqlite.connect(_db_path) as db:
         cursor = await db.execute(
-            "SELECT COALESCE(SUM(cost_usd), 0) as daily_spend FROM call_logs "
-            "WHERE request_id LIKE ? AND date(timestamp) = date('now') AND status = 'success'",
-            (f"%-{api_key[:8]}%",),
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM call_logs "
+            "WHERE tenant_key = ? AND date(timestamp) = date('now') AND status = 'success'",
+            (api_key,),
         )
         daily = (await cursor.fetchone())[0]
         cursor = await db.execute(
-            "SELECT COALESCE(SUM(cost_usd), 0) as monthly_spend FROM call_logs "
-            "WHERE request_id LIKE ? AND timestamp >= date('now', 'start of month') AND status = 'success'",
-            (f"%-{api_key[:8]}%",),
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM call_logs "
+            "WHERE tenant_key = ? AND timestamp >= date('now', 'start of month') AND status = 'success'",
+            (api_key,),
         )
         monthly = (await cursor.fetchone())[0]
         return {"daily_spend_usd": daily, "monthly_spend_usd": monthly}
@@ -75,13 +75,12 @@ async def check_tenant_budget(tenant: TenantInfo) -> Optional[str]:
 
 async def upsert_tenant(api_key: str, name: str = "", rpm_limit: int = 60,
                         daily_budget_usd: float = 0, monthly_budget_usd: float = 0):
-    async with aiosqlite.connect(_db_path) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO tenants (api_key, name, rpm_limit, daily_budget_usd, monthly_budget_usd) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (api_key, name, rpm_limit, daily_budget_usd, monthly_budget_usd),
-        )
-        await db.commit()
+    from app.storage.database import enqueue_write
+    await enqueue_write(
+        "INSERT OR REPLACE INTO tenants (api_key, name, rpm_limit, daily_budget_usd, monthly_budget_usd) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [api_key, name, rpm_limit, daily_budget_usd, monthly_budget_usd],
+    )
     _tenant_limiters.pop(api_key, None)
 
 

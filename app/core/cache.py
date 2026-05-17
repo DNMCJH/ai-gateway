@@ -69,6 +69,7 @@ async def cache_get(request: ChatCompletionRequest) -> Optional[dict]:
 async def cache_put(request: ChatCompletionRequest, response_dict: dict):
     if not settings.cache_enabled:
         return
+    from app.storage.database import enqueue_write
     key = _cache_key(request)
     now = time.time()
     response_json = json.dumps(response_dict, ensure_ascii=False)
@@ -80,13 +81,11 @@ async def cache_put(request: ChatCompletionRequest, response_dict: dict):
         if emb:
             embedding = json.dumps(emb)
 
-    async with aiosqlite.connect(_db_path) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO response_cache (cache_key, model, response_json, created_at, embedding) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (key, request.model, response_json, now, embedding),
-        )
-        await db.commit()
+    await enqueue_write(
+        "INSERT OR REPLACE INTO response_cache (cache_key, model, response_json, created_at, embedding) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [key, request.model, response_json, now, embedding],
+    )
 
 
 # --- Semantic cache ---

@@ -2,7 +2,8 @@ import json
 import time
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
@@ -75,7 +76,7 @@ def _get_fallbacks(primary):
     return [p for p in registry.available_providers() if p.name != primary.name]
 
 
-async def _stream_response(provider, request, fallbacks, request_id):
+async def _stream_response(provider, request, fallbacks, request_id, tenant_key=None):
     input_tokens = 0
     output_tokens = 0
     accumulated_content = []
@@ -98,20 +99,23 @@ async def _stream_response(provider, request, fallbacks, request_id):
             request_id=request_id, model=request.model, provider=provider.name,
             input_tokens=input_tokens, output_tokens=output_tokens,
             cost_usd=cost, latency_ms=latency, status="success",
+            tenant_key=tenant_key,
             request_body=request_body,
             response_body=_serialize_response_body("".join(accumulated_content)),
         )
     except Exception as e:
+        yield json.dumps({"error": str(e)}, ensure_ascii=False)
         latency = int((time.monotonic() - start) * 1000)
         await log_call(
             request_id=request_id, model=request.model, provider=provider.name,
             latency_ms=latency, status="error", error_message=str(e),
+            tenant_key=tenant_key,
             request_body=request_body,
         )
 
 
 @router.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: ChatCompletionRequest, raw_request: Request):
     # Resolve prompt_id if provided
     if request.prompt_id:
         prompt = await resolve_prompt_ab(request.prompt_id)
@@ -128,17 +132,27 @@ async def chat_completions(request: ChatCompletionRequest):
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages is required (or provide prompt_id)")
 
+    tenant = getattr(raw_request.state, "tenant", None)
+    tenant_key = tenant.api_key if tenant else None
+
     provider = _resolve_route(request)
 
     if not limiter.acquire(provider.name):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    remaining = limiter.remaining(provider.name)
+    rate_headers = {
+        "X-RateLimit-Limit": str(settings.rate_limit_rpm),
+        "X-RateLimit-Remaining": str(remaining),
+    }
 
     fallbacks = _get_fallbacks(provider)
     request_id = f"req-{uuid.uuid4().hex[:12]}"
 
     if request.stream:
         return EventSourceResponse(
-            _stream_response(provider, request, fallbacks, request_id)
+            _stream_response(provider, request, fallbacks, request_id, tenant_key),
+            headers=rate_headers,
         )
 
     # Cache lookup (non-streaming only)
@@ -150,7 +164,7 @@ async def chat_completions(request: ChatCompletionRequest):
         await log_call(
             request_id=request_id, model=request.model, provider="cache",
             input_tokens=0, output_tokens=0, cost_usd=0, latency_ms=0,
-            status="cache_hit",
+            status="cache_hit", tenant_key=tenant_key,
         )
         return cached
 
@@ -166,16 +180,19 @@ async def chat_completions(request: ChatCompletionRequest):
             request_id=request_id, model=request.model, provider=provider.name,
             input_tokens=usage.prompt_tokens, output_tokens=usage.completion_tokens,
             cost_usd=cost, latency_ms=latency, status="success",
+            tenant_key=tenant_key,
             request_body=request_body,
             response_body=_serialize_response_body(content),
         )
         await cache_put(request, response.model_dump())
-        return response
+        resp = JSONResponse(content=response.model_dump(), headers=rate_headers)
+        return resp
     except Exception as e:
         latency = int((time.monotonic() - start) * 1000)
         await log_call(
             request_id=request_id, model=request.model, provider=provider.name,
             latency_ms=latency, status="error", error_message=str(e),
+            tenant_key=tenant_key,
             request_body=request_body,
         )
         raise HTTPException(status_code=502, detail=str(e))

@@ -12,21 +12,21 @@ _db_path = settings.db_path
 
 async def create_prompt(name: str, messages: list[dict], model: str = "",
                         temperature: float = 1.0, ab_weight: float = 1.0) -> dict:
+    from app.storage.database import enqueue_write
     async with aiosqlite.connect(_db_path) as db:
         cursor = await db.execute(
             "SELECT COALESCE(MAX(version), 0) FROM prompts WHERE name = ?", (name,)
         )
         max_ver = (await cursor.fetchone())[0]
-        new_ver = max_ver + 1
-        prompt_id = f"prompt-{uuid.uuid4().hex[:8]}"
-        messages_json = json.dumps(messages, ensure_ascii=False)
-        await db.execute(
-            "INSERT INTO prompts (id, name, version, messages_json, model, temperature, ab_weight) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (prompt_id, name, new_ver, messages_json, model, temperature, ab_weight),
-        )
-        await db.commit()
-        return {"id": prompt_id, "name": name, "version": new_ver}
+    new_ver = max_ver + 1
+    prompt_id = f"prompt-{uuid.uuid4().hex[:8]}"
+    messages_json = json.dumps(messages, ensure_ascii=False)
+    await enqueue_write(
+        "INSERT INTO prompts (id, name, version, messages_json, model, temperature, ab_weight) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [prompt_id, name, new_ver, messages_json, model, temperature, ab_weight],
+    )
+    return {"id": prompt_id, "name": name, "version": new_ver}
 
 
 async def get_prompt(name: str, version: Optional[int] = None) -> Optional[dict]:
@@ -81,9 +81,6 @@ async def list_prompts(name: Optional[str] = None) -> list[dict]:
 
 
 async def deactivate_prompt(prompt_id: str) -> bool:
-    async with aiosqlite.connect(_db_path) as db:
-        cursor = await db.execute(
-            "UPDATE prompts SET is_active = 0 WHERE id = ?", (prompt_id,)
-        )
-        await db.commit()
-        return cursor.rowcount > 0
+    from app.storage.database import enqueue_write
+    await enqueue_write("UPDATE prompts SET is_active = 0 WHERE id = ?", [prompt_id])
+    return True

@@ -45,7 +45,7 @@ async def init_db():
         )
     """)
     # Idempotent migration for tables created before body columns existed.
-    for col in ("request_body", "response_body"):
+    for col in ("request_body", "response_body", "tenant_key"):
         try:
             await _writer_conn.execute(f"ALTER TABLE call_logs ADD COLUMN {col} TEXT")
         except Exception:
@@ -92,15 +92,35 @@ async def init_db():
 
     _writer_queue = asyncio.Queue()
     _writer_task = asyncio.create_task(_writer_loop(), name="db-writer")
+    asyncio.create_task(_cache_eviction_loop(), name="cache-evictor")
 
 
 async def shutdown_db():
+    global _SHUTDOWN_FLAG
+    _SHUTDOWN_FLAG = True
     if _writer_queue is not None:
         await _writer_queue.put(_SHUTDOWN)
     if _writer_task is not None:
         await _writer_task
     if _writer_conn is not None:
         await _writer_conn.close()
+
+
+_SHUTDOWN_FLAG = False
+
+
+async def _cache_eviction_loop():
+    import time as _time
+    while not _SHUTDOWN_FLAG:
+        await asyncio.sleep(settings.cache_eviction_interval)
+        if _SHUTDOWN_FLAG:
+            break
+        cutoff = _time.time() - settings.cache_ttl_seconds
+        if _writer_queue:
+            await _writer_queue.put((
+                "DELETE FROM response_cache WHERE created_at <= ?", [cutoff]
+            ))
+            logger.info("cache eviction: removed entries older than %s", cutoff)
 
 
 async def _writer_loop():
@@ -119,13 +139,20 @@ async def _writer_loop():
 
 async def log_call(**kwargs):
     if _writer_queue is None:
-        # DB not initialized; drop the log rather than crash the request path.
         logger.warning("log_call before init_db: %s", kwargs.get("request_id"))
         return
     cols = ", ".join(kwargs.keys())
     placeholders = ", ".join(["?"] * len(kwargs))
     sql = f"INSERT INTO call_logs ({cols}) VALUES ({placeholders})"
     await _writer_queue.put((sql, list(kwargs.values())))
+
+
+async def enqueue_write(sql: str, params: list):
+    """Route arbitrary writes through the single-writer queue."""
+    if _writer_queue is None:
+        logger.warning("enqueue_write before init_db")
+        return
+    await _writer_queue.put((sql, params))
 
 
 async def get_logs(limit: int = 50, offset: int = 0, model: str = None, status: str = None):

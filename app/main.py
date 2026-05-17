@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+import logging
+import sys
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -13,6 +15,13 @@ from app.providers.openai import OpenAIProvider
 from app.providers.anthropic import AnthropicProvider
 from app.providers.ollama import OllamaProvider
 from app.storage.database import init_db, shutdown_db
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}',
+    datefmt="%Y-%m-%dT%H:%M:%S",
+    stream=sys.stdout,
+)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
