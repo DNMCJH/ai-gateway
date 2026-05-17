@@ -9,11 +9,12 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = []
     temperature: float = 1.0
     max_tokens: Optional[int] = None
     stream: bool = False
     top_p: float = 1.0
+    prompt_id: Optional[str] = None
 
 
 class Usage(BaseModel):

@@ -1,12 +1,14 @@
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, Request, status
 
 from app.config import settings
+from app.core.tenant import get_tenant, check_tenant_budget, get_tenant_limiter
 
 
-async def require_api_key(authorization: str | None = Header(default=None)):
+async def require_api_key(request: Request, authorization: str | None = Header(default=None)):
     keys = settings.gateway_api_keys
     if not keys:
-        return  # auth disabled when no keys configured
+        request.state.tenant = None
+        return
 
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
@@ -22,3 +24,21 @@ async def require_api_key(authorization: str | None = Header(default=None)):
             detail="Invalid API key",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Attach tenant info for downstream use
+    tenant = await get_tenant(token)
+    request.state.tenant = tenant
+
+    if tenant:
+        if not tenant.enabled:
+            raise HTTPException(status_code=403, detail="Tenant disabled")
+
+        # Per-tenant rate limit
+        limiter = get_tenant_limiter(tenant)
+        if not limiter.acquire(token):
+            raise HTTPException(status_code=429, detail="Tenant rate limit exceeded")
+
+        # Budget check
+        budget_msg = await check_tenant_budget(tenant)
+        if budget_msg:
+            raise HTTPException(status_code=429, detail=budget_msg)

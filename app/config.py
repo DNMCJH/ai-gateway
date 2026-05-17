@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     log_response_body: bool = False
     body_log_max_chars: int = 2000
 
+    # Response cache
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = 3600
+
+    # Semantic cache (uses DeepSeek embedding API — has per-call cost)
+    semantic_cache_enabled: bool = False
+    semantic_cache_threshold: float = 0.92
+
     model_config = {"env_file": ".env"}
 
 

@@ -12,8 +12,10 @@ from app.core.router import SmartRouter
 from app.core.retry import with_retry, stream_with_fallback
 from app.core.limiter import TokenBucketLimiter
 from app.core.cost import calculate_cost
+from app.core.cache import cache_get, cache_put, semantic_cache_get
+from app.core.prompt_registry import resolve_prompt_ab
 from app.storage.database import log_call
-from app.schemas.chat import ChatCompletionRequest
+from app.schemas.chat import ChatCompletionRequest, ChatMessage
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 smart_router = SmartRouter(settings.default_routing_strategy)
@@ -110,6 +112,22 @@ async def _stream_response(provider, request, fallbacks, request_id):
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
+    # Resolve prompt_id if provided
+    if request.prompt_id:
+        prompt = await resolve_prompt_ab(request.prompt_id)
+        if not prompt:
+            raise HTTPException(status_code=400, detail=f"Prompt '{request.prompt_id}' not found")
+        import json as _json
+        msgs = _json.loads(prompt["messages_json"]) if isinstance(prompt.get("messages_json"), str) else prompt.get("messages", [])
+        request.messages = [ChatMessage(**m) for m in msgs] + list(request.messages)
+        if prompt.get("model") and not request.model:
+            request.model = prompt["model"]
+        if prompt.get("temperature"):
+            request.temperature = prompt["temperature"]
+
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="messages is required (or provide prompt_id)")
+
     provider = _resolve_route(request)
 
     if not limiter.acquire(provider.name):
@@ -122,6 +140,19 @@ async def chat_completions(request: ChatCompletionRequest):
         return EventSourceResponse(
             _stream_response(provider, request, fallbacks, request_id)
         )
+
+    # Cache lookup (non-streaming only)
+    cached = await cache_get(request)
+    if not cached:
+        cached = await semantic_cache_get(request)
+    if cached:
+        cached["id"] = f"chatcmpl-cache-{uuid.uuid4().hex[:8]}"
+        await log_call(
+            request_id=request_id, model=request.model, provider="cache",
+            input_tokens=0, output_tokens=0, cost_usd=0, latency_ms=0,
+            status="cache_hit",
+        )
+        return cached
 
     request_body = _serialize_request_body(request)
     start = time.monotonic()
@@ -138,6 +169,7 @@ async def chat_completions(request: ChatCompletionRequest):
             request_body=request_body,
             response_body=_serialize_response_body(content),
         )
+        await cache_put(request, response.model_dump())
         return response
     except Exception as e:
         latency = int((time.monotonic() - start) * 1000)

@@ -50,6 +50,44 @@ async def init_db():
             await _writer_conn.execute(f"ALTER TABLE call_logs ADD COLUMN {col} TEXT")
         except Exception:
             pass
+
+    await _writer_conn.execute("""
+        CREATE TABLE IF NOT EXISTS response_cache (
+            cache_key TEXT PRIMARY KEY,
+            model TEXT NOT NULL,
+            response_json TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            embedding TEXT
+        )
+    """)
+
+    await _writer_conn.execute("""
+        CREATE TABLE IF NOT EXISTS tenants (
+            api_key TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            rpm_limit INTEGER DEFAULT 60,
+            daily_budget_usd REAL DEFAULT 0,
+            monthly_budget_usd REAL DEFAULT 0,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+    await _writer_conn.execute("""
+        CREATE TABLE IF NOT EXISTS prompts (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            messages_json TEXT NOT NULL,
+            model TEXT DEFAULT '',
+            temperature REAL DEFAULT 1.0,
+            is_active INTEGER DEFAULT 1,
+            ab_weight REAL DEFAULT 1.0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(name, version)
+        )
+    """)
+
     await _writer_conn.commit()
 
     _writer_queue = asyncio.Queue()
